@@ -6,16 +6,40 @@ import math
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
+import time
+from copy import copy
+
+
+class ConnectionLost(Exception):
+    """Transport failure carrying the number of samples already saved."""
+
+
+def board_call(function, *args):
+    try:
+        return function(*args)
+    except Exception as exc:
+        raise ConnectionLost(str(exc)) from exc
 
 
 def record(args, device=None):
     target = Path(args.output)
+    if not target.is_absolute():
+        target = Path(__file__).resolve().parent / "Outputs" / target
     target.parent.mkdir(parents=True, exist_ok=True)
     count = 0
     previous = None
     started = False
-    # Exclusive creation protects earlier recordings from accidental overwrite.
-    with target.open("x", newline="", encoding="utf-8") as stream:
+    # Exclusive creation also handles simultaneous recordings safely.
+    original = target
+    suffix = 0
+    while True:
+        try:
+            stream = target.open("x", newline="", encoding="utf-8")
+            break
+        except FileExistsError:
+            suffix += 1
+            target = original.with_name(f"{original.stem}_{suffix:03d}{original.suffix}")
+    with stream:
         writer = csv.writer(stream)
         writer.writerow([
             "sample_index", "nominal_elapsed_seconds", "sequence", "sequence_gap_mod16",
@@ -24,7 +48,7 @@ def record(args, device=None):
         stream.flush()
         try:
             if device is not None:
-                device.start(args.rate, [args.channel - 1])
+                board_call(device.start, args.rate, [args.channel - 1])
                 started = True
             print(f"Recording A{args.channel} at {args.rate} Hz to {target.resolve()}")
             print("Press Ctrl+C to stop.")
@@ -38,7 +62,7 @@ def record(args, device=None):
                              int(((1 << bits) - 1) * (0.5 + 0.1 * math.sin((count + i) / args.rate)))]
                             for i in range(size)]
                 else:
-                    rows = device.read(size)
+                    rows = board_call(device.read, size)
                 received = datetime.now(timezone.utc).isoformat()
                 if len(rows) != size:
                     raise RuntimeError(f"Expected {size} samples; received {len(rows)}")
@@ -47,11 +71,13 @@ def record(args, device=None):
                     gap = 0 if previous is None else (sequence - previous - 1) % 16
                     writer.writerow([count, f"{count / args.rate:.6f}", sequence, gap,
                                      int(row[5]), f"A{args.channel}", args.rate, received])
+                    print(f"{count / args.rate:9.3f} s | A{args.channel} | EDA raw ADC: {int(row[5])}")
                     previous = sequence
                     count += 1
                 stream.flush()
-        except KeyboardInterrupt:
-            print("\nRecording stopped.")
+        except ConnectionLost as exc:
+            exc.saved_count = count
+            raise
         finally:
             if started:
                 try:
@@ -69,7 +95,8 @@ def main():
                         help="Physical input number: 1 means A1, 2 means A2, etc.")
     parser.add_argument("--rate", type=int, choices=[1, 10, 100, 1000], default=100)
     parser.add_argument("--duration", type=float, help="Seconds of samples; omit to record until Ctrl+C")
-    parser.add_argument("--output", default=f"eda_{datetime.now():%Y%m%d_%H%M%S}.csv")
+    parser.add_argument("--output", default=str(Path(__file__).resolve().parent / "Outputs" / f"eda_{datetime.now():%Y%m%d_%H%M%S}.csv"))
+    parser.add_argument("--retry-delay", type=float, default=3, help="Seconds between reconnection attempts (default: 3)")
     parser.add_argument("--simulate", action="store_true", help="Generate synthetic data without hardware")
     args = parser.parse_args()
     if args.duration is not None and (not math.isfinite(args.duration) or args.duration <= 0):
@@ -78,22 +105,47 @@ def main():
         parser.error("--simulate requires --duration")
     if not args.simulate and not args.port:
         parser.error("--port is required unless --simulate is used")
-    device = None
+    if not math.isfinite(args.retry_delay) or args.retry_delay <= 0:
+        parser.error("--retry-delay must be a finite positive number")
     try:
-        if not args.simulate:
-            from bitalino import BITalino
-            device = BITalino(args.port, timeout=5)
-        record(args, device)
+        if args.simulate:
+            record(args)
+            return 0
+        from bitalino import BITalino
+        return run_live(args, BITalino)
+    except KeyboardInterrupt:
+        print("\nRecording stopped.")
         return 0
     except Exception as exc:
         print(f"Recording failed: {exc}", file=sys.stderr)
         return 1
-    finally:
-        if device is not None:
-            try:
-                device.close()
-            except Exception as exc:
-                print(f"Could not close connection: {exc}", file=sys.stderr)
+
+
+def run_live(args, factory):
+    remaining = None if args.duration is None else math.ceil(args.duration * args.rate)
+    while remaining is None or remaining > 0:
+        device = None
+        try:
+            print(f"Connecting to {args.port}...")
+            device = board_call(factory, args.port, 5)
+            segment = copy(args)
+            # Avoid ceil adding an extra sample due to floating-point rounding.
+            segment.duration = None if remaining is None else math.nextafter(remaining / args.rate, 0)
+            record(segment, device)
+            return 0
+        except ConnectionLost as exc:
+            if remaining is not None:
+                remaining -= getattr(exc, "saved_count", 0)
+            print(f"Connection interrupted: {exc}. Saved data is preserved.", file=sys.stderr)
+        finally:
+            if device is not None:
+                try:
+                    device.close()
+                except Exception as exc:
+                    print(f"Could not close connection: {exc}", file=sys.stderr)
+        print(f"Retrying in {args.retry_delay:g} seconds; Ctrl+C to stop.")
+        time.sleep(args.retry_delay)
+
 
 
 if __name__ == "__main__":
