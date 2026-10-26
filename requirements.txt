@@ -1,0 +1,6 @@
+platformio
+pyserial
+matplotlib
+# EDA recorder (Input/record_eda.py). Also run, separately:
+#   python -m pip install --no-deps bitalino==1.2.6
+numpy>1.19

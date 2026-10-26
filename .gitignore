@@ -1,0 +1,8 @@
+.venv/
+.pio/
+# PlatformIO regenerates these per machine; keep only our settings
+.vscode/*
+!.vscode/settings.json
+__pycache__/
+# local recordings
+logs/
