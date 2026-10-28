@@ -4,5 +4,6 @@
 .vscode/*
 !.vscode/settings.json
 __pycache__/
-# local recordings
+# local recordings (participant data stays off GitHub)
 logs/
+sessions/

@@ -23,9 +23,9 @@ The separate `--no-deps` installation skips the upstream PyBluez dependency, whi
 
 ## CSV contents
 
-Each row contains a sample index, nominal elapsed seconds (`index / rate`), board sequence number, sequence gap modulo 16, raw EDA ADC value, physical input, sampling rate, and batch receipt time in UTC. The UTC value describes receipt of a batch on the computer, not the individual sensor measurement time. Nominal elapsed time does not compensate for lost samples or clock drift.
+Each row contains a sample index, nominal elapsed seconds (`index / rate`), board sequence number, sequence gap modulo 16, raw EDA ADC value, skin conductance in microsiemens, physical input, sampling rate, and batch receipt time in UTC. The UTC value describes receipt of a batch on the computer, not the individual sensor measurement time. Nominal elapsed time does not compensate for lost samples or clock drift.
 
-Sequence gaps flag discontinuities detectable with the board's 4-bit sequence counter; losses of exact multiples of 16 cannot be detected this way. Raw ADC values are not microsiemens. Conversion must use the transfer function for your EDA sensor and input resolution (A1–A4: 10 bits; A5–A6: 6 bits). No filtering or calibration is applied.
+Sequence gaps flag discontinuities detectable with the board's 4-bit sequence counter; losses of exact multiples of 16 cannot be detected this way. `eda_microsiemens` uses the transfer function from the [BITalino EDA sensor datasheet, Rev B](https://support.pluxbiosignals.com/wp-content/uploads/2021/11/eda-sensor-datasheet-revb.pdf): `EDA(µS) = (ADC / 2^n × VCC) / 0.132`, with VCC = 3.3 V and n = 10 for A1–A4 or 6 for A5–A6. The range is 0–25 µS and the sensor bandwidth is 0–2.8 Hz. Older sensor revisions used a different formula with an offset (`(ADC / 2^n × VCC − 0.574) / 0.132`); `eda_raw_adc` is kept so data can be reconverted if needed. Readings near 0 µS usually mean an electrode has lost skin contact. No filtering or calibration is applied.
 
 The program flushes each batch to the operating system and attempts to stop and close the board on exit. Previously written batches remain available after an acquisition error; an interrupted partial batch may be lost. Flushing is not a guarantee against disk or power failure. A duration specifies sample count, so connection/setup time is additional.
 

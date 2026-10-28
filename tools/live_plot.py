@@ -29,7 +29,7 @@ MAX_POINTS = WINDOW_S * 200  # per series; older points are also dropped by time
 WARN_SHOW_S = 3  # how long a WARN/ERROR line stays highlighted
 BPM_YMIN, BPM_YMAX = 50, 110  # heart-rate axis shows at least this range
 EDA_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Input", "record_eda.py")
-EDA_LINE = re.compile(r"\s*([\d.]+) s \| A\d \| EDA raw ADC: (\d+)")  # record_eda.py sample print
+EDA_LINE = re.compile(r"\s*([\d.]+) s \| A\d \| EDA raw ADC: \d+ \| ([\d.]+) uS")  # record_eda.py sample print
 
 # Runs record_eda.py so that Ctrl+Break (sent on exit) raises KeyboardInterrupt,
 # which lets it stop the board and close the file cleanly.
@@ -48,7 +48,7 @@ PANELS = [
     ("Accel (g)", ["ax", "ay", "az", "acc_mag"]),
     ("Gyro (deg/s)", ["gx", "gy", "gz"]),
 ]
-EDA_PANEL = ("EDA raw ADC (BITalino)", ["eda"])
+EDA_PANEL = ("EDA (uS, BITalino)", ["eda"])
 
 
 class Data:

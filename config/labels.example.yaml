@@ -1,0 +1,29 @@
+# Marker text -> labels, used offline by tools/make_labels.py. Recording is not affected.
+#
+# Each entry under `columns` becomes one label column in features_labeled.csv, so several
+# schemes (protocol phase, self-report, ...) can coexist and be changed at any time.
+# Within a column, rules are tried in order; the first regex that matches (case-insensitive) wins.
+# A matched marker starts a segment that lasts until the next matched marker of that column,
+# or for hold_s seconds if given. label: null ends the current segment (unlabeled afterwards).
+# Markers matched by no rule are notes only. {1}, {2} in a label are regex groups.
+
+drop_after_marker_s: 60   # after each phase change, left unlabeled (physiology needs time to respond)
+drop_before_marker_s: 0
+
+columns:
+  arousal:                  # 0 calm, 1 aroused, empty = unused
+    rules:
+      - match: "^(baseline|rest|breath|recover|neutral)"
+        label: 0
+      - match: "^(math|cold|noise|stress|startle|horror)"
+        label: 1
+      # "scare" (a jump scare during the film) matches nothing here: a note only, used to check spikes
+      - match: "^(end|stop|pause|move)"
+        label: null
+
+  self_report:
+    drop_after_marker_s: 0
+    rules:
+      - match: "^score\\s+(\\d+)"   # e.g. marker "score 3"
+        label: "{1}"
+        hold_s: 30                  # the score describes the 30 s after it was given

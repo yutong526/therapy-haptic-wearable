@@ -10,6 +10,19 @@ import time
 from copy import copy
 
 
+EDA_VCC = 3.3  # BITalino operating voltage (EDA sensor datasheet Rev B)
+EDA_US_PER_VOLT = 1 / 0.132  # transfer function: EDA(uS) = (ADC / 2^n * VCC) / 0.132, range 0-25 uS
+
+
+def channel_bits(channel):
+    """ADC resolution of a physical input: A1-A4 are 10-bit, A5-A6 are 6-bit."""
+    return 10 if channel <= 4 else 6
+
+
+def adc_to_microsiemens(adc, bits=10):
+    return adc / (1 << bits) * EDA_VCC * EDA_US_PER_VOLT
+
+
 class ConnectionLost(Exception):
     """Transport failure carrying the number of samples already saved."""
 
@@ -43,8 +56,9 @@ def record(args, device=None):
         writer = csv.writer(stream)
         writer.writerow([
             "sample_index", "nominal_elapsed_seconds", "sequence", "sequence_gap_mod16",
-            "eda_raw_adc", "analog_input", "sampling_rate_hz", "batch_received_utc",
+            "eda_raw_adc", "eda_microsiemens", "analog_input", "sampling_rate_hz", "batch_received_utc",
         ])
+        bits = channel_bits(args.channel)
         stream.flush()
         try:
             if device is not None:
@@ -57,7 +71,6 @@ def record(args, device=None):
             while total is None or count < total:
                 size = batch_size if total is None else min(batch_size, total - count)
                 if device is None:
-                    bits = 10 if args.channel <= 4 else 6
                     rows = [[(count + i) % 16, 0, 0, 0, 0,
                              int(((1 << bits) - 1) * (0.5 + 0.1 * math.sin((count + i) / args.rate)))]
                             for i in range(size)]
@@ -69,9 +82,11 @@ def record(args, device=None):
                 for row in rows:
                     sequence = int(row[0])
                     gap = 0 if previous is None else (sequence - previous - 1) % 16
+                    adc = int(row[5])
+                    us = adc_to_microsiemens(adc, bits)
                     writer.writerow([count, f"{count / args.rate:.6f}", sequence, gap,
-                                     int(row[5]), f"A{args.channel}", args.rate, received])
-                    print(f"{count / args.rate:9.3f} s | A{args.channel} | EDA raw ADC: {int(row[5])}")
+                                     adc, f"{us:.4f}", f"A{args.channel}", args.rate, received])
+                    print(f"{count / args.rate:9.3f} s | A{args.channel} | EDA raw ADC: {adc} | {us:.3f} uS")
                     previous = sequence
                     count += 1
                 stream.flush()
