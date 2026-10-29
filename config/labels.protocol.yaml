@@ -1,0 +1,13 @@
+# Labels for the testing protocol in docs/testing_process.md (used offline by tools/make_labels.py).
+# Markers typed during recording: 0 rest, 1 chat, 2 math, 3 game, end.
+
+drop_after_marker_s: 0    # chat lasts only 1 min, so nothing is dropped; physiological lag is handled later
+drop_before_marker_s: 0
+
+columns:
+  condition:                # 0 rest, 1 chat, 2 math, 3 game, empty = outside the protocol
+    rules:
+      - match: "^([0-3])$"
+        label: "{1}"
+      - match: "^end"
+        label: null

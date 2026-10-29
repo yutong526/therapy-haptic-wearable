@@ -1,11 +1,13 @@
-"""Record a session from the BITalino (EDA) and the ESP32 (PPG + IMU) and output state/arousal live.
+"""Record a session from the BITalino (EDA, ACC), the RT7015 (PPG over BLE) and the ESP32 (IMU,
+output) and output state/arousal live.
 
 Saves sessions/<subject>_<time>/: session.json, eda.csv, acc.csv (with --acc-channel), ppg.csv,
-imu.csv (record mode only), beats.csv, esp32_log.csv, markers.csv, features.csv (1 row per second) and baseline.json.
+imu.csv (ESP32 record mode only), beats.csv, esp32_log.csv, markers.csv, features.csv (1 row per second) and baseline.json.
 Type any text + Enter while recording to add a marker (e.g. "baseline", "math start", "score 3").
 Press Ctrl+C to stop. Examples:
     python tools/run_session.py --subject p01 --eda COM13 --esp32 COM5
     python tools/run_session.py --subject p01 --eda COM15 --acc-channel 5 --esp32 COM11   # motion from BITalino ACC
+    python tools/run_session.py --subject p01 --eda COM15 --esp32 COM11 --ppg esp32       # PPG wired to the ESP32
     python tools/run_session.py --subject demo --eda COM13 --esp32 COM5 --esp32-mode live --warmup-s 30 --baseline-s 60
     python tools/run_session.py --subject test --simulate --warmup-s 20 --baseline-s 40
 """
@@ -22,12 +24,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from biofeedback import settings as S  # noqa: E402
 from biofeedback.clock import Clock  # noqa: E402
 from biofeedback.eda import ACC_COLUMNS, EDA_COLUMNS, EdaSource  # noqa: E402
-from biofeedback.esp32 import BEAT_COLUMNS, IMU_COLUMNS, LOG_COLUMNS, PPG_COLUMNS, Esp32Source, SerialTransport  # noqa: E402
+from biofeedback import esp32 as wired_ppg, ppg_ble  # noqa: E402
+from biofeedback.esp32 import IMU_COLUMNS, LOG_COLUMNS, Esp32Source, SerialTransport  # noqa: E402
 from biofeedback.pipeline import COLUMNS, STATE_NAMES, Processor  # noqa: E402
 from biofeedback.profile import load_profile  # noqa: E402
 from biofeedback.publish import SerialCommandPublisher, UdpJsonPublisher  # noqa: E402
 from biofeedback.recorder import Recorder  # noqa: E402
-from biofeedback.sim import SimBitalino, SimTransport  # noqa: E402
+from biofeedback.sim import SimBitalino, SimPpgBle, SimTransport  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 STATUS_EVERY_S = 5
@@ -80,7 +83,11 @@ def main():
     ap.add_argument("--esp32", help="ESP32 serial port, e.g. COM5")
     ap.add_argument("--esp32-mode", choices=["record", "live"], default="record",
                     help="record: also 100 Hz raw PPG/IMU (USB only); live: only what the processing needs")
-    ap.add_argument("--simulate", action="store_true", help="simulated BITalino and ESP32, no hardware")
+    ap.add_argument("--ppg", choices=["ble", "esp32", "none"], default="ble",
+                    help="ble: RT7015 over its own BLE link (default); esp32: PPG wired to the ESP32 (B lines)")
+    ap.add_argument("--ppg-address", default=S.PPG_BLE_ADDRESS,
+                    help=f"RT7015 BLE address (default: scan for a name containing {S.PPG_BLE_NAME!r})")
+    ap.add_argument("--simulate", action="store_true", help="simulated BITalino, PPG and ESP32, no hardware")
     add_processing_args(ap)
     ap.add_argument("--sinks", default="serial,udp", help="live outputs, comma separated: serial, udp (or none)")
     ap.add_argument("--udp", default=S.UDP_TARGET, help="UDP target host:port")
@@ -88,8 +95,8 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "sessions"), help="parent folder for sessions")
     ap.add_argument("--seconds", type=int, help="stop after this many seconds (default: until Ctrl+C)")
     args = ap.parse_args()
-    if not (args.simulate or args.eda or args.esp32):
-        ap.error("give --eda and/or --esp32, or --simulate")
+    if not (args.simulate or args.eda or args.esp32 or args.ppg == "ble"):
+        ap.error("give --eda, --esp32 and/or --ppg ble, or --simulate")
     if args.acc_channel and not (args.eda or args.simulate):
         ap.error("--acc-channel needs --eda (the ACC is read by the BITalino)")
     if args.acc_channel == args.eda_channel:
@@ -105,15 +112,17 @@ def main():
     recorder = Recorder(folder, clock, {
         "subject": args.subject, "eda_port": args.eda, "eda_channel": args.eda_channel,
         "acc_channel": args.acc_channel, "motion_source": motion_source,
+        "ppg_source": args.ppg, "ppg_address": args.ppg_address,
         "esp32_port": args.esp32, "esp32_mode": args.esp32_mode, "simulate": args.simulate,
         "profile": str(profile_path), "profile_found": found, "profile_values": profile,
         "warmup_s": args.warmup_s, "baseline_s": args.baseline_s, "confidence": args.confidence,
         "smoothing": not args.no_smoothing, "baseline_mode": args.baseline_mode,
-        "settings": {k: v for k, v in vars(S).items() if k.isupper()},
+        "settings": {k: v.hex(" ") if isinstance(v, bytes) else v for k, v in vars(S).items() if k.isupper()},
     })
     streams = [("eda", EDA_COLUMNS)] + ([("acc", ACC_COLUMNS)] if args.acc_channel else [])
-    for name, columns in streams + [("ppg", PPG_COLUMNS), ("imu", IMU_COLUMNS),
-                          ("beats", BEAT_COLUMNS), ("esp32_log", LOG_COLUMNS),
+    ppg = ppg_ble if args.ppg == "ble" else wired_ppg  # column sets of ppg.csv / beats.csv
+    for name, columns in streams + [("ppg", ppg.PPG_COLUMNS), ("imu", IMU_COLUMNS),
+                          ("beats", ppg.BEAT_COLUMNS), ("esp32_log", LOG_COLUMNS),
                           ("markers", ["t_ms", "local_time", "text"]), ("features", COLUMNS)]:
         recorder.add_stream(name, columns)
 
@@ -123,7 +132,9 @@ def main():
     def sink(stream, t, values):
         t = round(t, 1)  # same precision as the CSV, so a replay gives identical results
         recorder.write(stream, t, values)
-        arrival = round(values[0], 1) if stream in ("eda", "acc") else t  # BITalino: batch receive time
+        # BITalino: batch receive time; BLE beats: sample where the beat was accepted
+        timed = stream in ("eda", "acc") or (stream == "beats" and args.ppg == "ble")
+        arrival = round(values[0], 1) if timed else t
         with lock:
             processor.add(stream, t, values, arrival)
 
@@ -140,8 +151,20 @@ def main():
                                  acc_channel=args.acc_channel))
     if args.simulate or args.esp32:
         transport = SimTransport() if args.simulate else SerialTransport(args.esp32)
-        esp32 = Esp32Source(transport, clock, sink, stop, mode=args.esp32_mode)
+        esp32_sink = sink
+        if args.ppg != "esp32":
+            def esp32_sink(stream, t, values):  # PPG is not wired to the ESP32: ignore its ppg/beats
+                if stream not in ("ppg", "beats"):
+                    sink(stream, t, values)
+        esp32 = Esp32Source(transport, clock, esp32_sink, stop, mode=args.esp32_mode)
         sources.append(esp32)
+    ppg_source = None
+    if args.ppg == "ble":
+        if args.simulate:
+            ppg_source = SimPpgBle(clock, sink, stop)
+        else:
+            ppg_source = ppg_ble.PpgBleSource(args.ppg_address, clock, sink, stop)
+        sources.append(ppg_source)
     for s in sources:
         s.start()
     threading.Thread(target=marker_loop, args=(clock, recorder), daemon=True).start()
@@ -192,6 +215,9 @@ def main():
             s.join(timeout=5)
         recorder.write_json("baseline.json", {"mu_initial": processor.mu_initial, "mu_final": processor.mu})
         recorder.close()
+        if ppg_source is not None:
+            parser = ppg_source.stream.parser
+            print(f"PPG: {parser.bad_frames} bad frames dropped, {parser.skipped_bytes} bytes skipped")
         print(f"Saved session to {folder}")
 
 

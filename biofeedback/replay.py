@@ -12,6 +12,7 @@ from pathlib import Path
 from . import settings as S
 from .eda import acquired, adc_to_g, adc_to_microsiemens, channel_bits
 from .esp32 import parse_line
+from .ppg_ble import detect_beats
 
 
 def read_csv(path):
@@ -42,9 +43,15 @@ def load_events(session):
             values = [round(float(r["recv_ms"]), 1), int(r["sample_index"]), adc,
                       adc_to_g(adc, acc_bits, cmin, cmax)]
             events.append((values[0], "acc", float(r["t_ms"]), values))
-    for r in read_csv(session / "beats.csv"):
-        t = float(r["t_ms"])
-        events.append((t, "beats", t, [int(r["board_ms"]), int(r["ibi_ms"]), int(r["bpm"])]))
+    if meta.get("ppg_source") == "ble":
+        # beats detected again from the raw PPG (current thresholds), arriving at their confirm sample
+        samples = [(float(r["t_ms"]), float(r["aout_mv"]), float(r["sout_mv"])) for r in read_csv(session / "ppg.csv")]
+        for t, values in detect_beats(samples):
+            events.append((values[0], "beats", t, values))
+    else:
+        for r in read_csv(session / "beats.csv"):
+            t = float(r["t_ms"])
+            events.append((t, "beats", t, [int(r["board_ms"]), int(r["ibi_ms"]), int(r["bpm"])]))
     for r in read_csv(session / "esp32_log.csv"):
         t = float(r["t_ms"])
         for stream, values in parse_line(r["line"]):

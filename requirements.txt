@@ -3,5 +3,6 @@ pyserial
 matplotlib
 numpy>1.19
 pyyaml
+bleak          # RT7015 PPG over BLE
 # BITalino API (EDA). Install separately, skipping PyBluez which needs a C++ compiler:
 #   python -m pip install --no-deps bitalino==1.2.6

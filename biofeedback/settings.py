@@ -34,7 +34,27 @@ WINDOW_MIN_FRACTION = 0.5
 SCR_MIN_AMP_US = 0.1         # rise of at least this ...
 SCR_MAX_RISE_S = 5           # ... within this time; counted once it has fallen back by half
 
-# Heart rate (firmware B lines, one per beat; validity decided here, not on the board)
+# PPG over the RT7015's own BLE link (biofeedback/ppg_ble.py, run_session.py --ppg ble)
+PPG_BLE_NAME = "RT7015"      # scan for a device whose name contains this ...
+PPG_BLE_ADDRESS = None       # ... unless fixed here, e.g. "70:15:88:88:88:88" (or --ppg-address)
+PPG_NOTIFY_UUID = "0000FFF4-0000-1000-8000-00805F9B34FB"
+PPG_WRITE_UUID = "0000FFF3-0000-1000-8000-00805F9B34FB"
+PPG_START_CMD = bytes.fromhex("AA 04 80 11 01 2F BB")
+PPG_STOP_CMD = bytes.fromhex("AA 04 80 11 00 2E BB")
+PPG_SCAN_S = 10              # scan timeout per attempt
+PPG_RETRY_S = 3              # wait before reconnecting
+PPG_RATES = (125, 250, 500, 1000, 2000)  # sample-rate index in the 0x10 frame
+PPG_DEFAULT_RATE = 500
+PPG_CLOCK_GAIN = 0.01        # sample clock: slow correction towards later packet arrivals (drift)
+PPG_RESYNC_MS = 500          # packet this much later than its samples' predicted time -> re-anchor (gap)
+PPG_GAP_MS = 100             # larger gap between sample times -> beat detection restarts (no IBI across)
+# Beat detection (vendor logic): SOUT above this is "high"; a rising edge is a candidate beat,
+# accepted if AOUT at the falling edge minus AOUT at the rising edge exceeds PPG_MIN_PULSE_MV.
+PPG_SOUT_HIGH_MV = 1500
+PPG_MIN_PULSE_MV = 100       # vendor uses 500; on p01 (2026-10-29, median change 257 mV) 500 left HR
+                             # available 8 % of the time, 100 -> 91 % with the same median HR (82)
+
+# Heart rate (one IBI per detected beat; validity decided here, not by the detector)
 IBI_MIN_MS, IBI_MAX_MS = 300, 2000
 IBI_MAX_DEV = 0.30           # valid beat: within 30 % of the median of the last IBIs
 IBI_HISTORY = 5

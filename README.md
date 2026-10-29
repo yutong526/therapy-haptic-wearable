@@ -4,7 +4,9 @@ Estimates the wearer's physiological arousal every second, relative to their own
 three sensors, and sends `state, arousal, valid, t_ms` to the output side (airbag).
 
 - **EDA**: BITalino EDA sensor on A1 → Bluetooth → laptop, 100 Hz
-- **PPG**: RT7015 pulse module (AOUT, SOUT) on an ESP32-S3
+- **PPG**: RT7015 pulse module over its own BLE link → laptop (`--ppg ble`, default, 500 Hz AOUT + SOUT);
+  beats detected on the laptop. `--ppg esp32` = old wiring to the ESP32 (firmware B lines)
+- **ESP32-S3**: IMU (if not using the BITalino ACC) and the output link
 - **Motion**: BITalino ACC sensor on a second BITalino input (`--acc-channel`, one axis, 100 Hz),
   or the GY-521 (MPU6050) on the ESP32, I2C (SDA GPIO8, SCL GPIO9), when `--acc-channel` is not given
 
@@ -24,11 +26,13 @@ python -m serial.tools.list_ports -v               # list ports
 & "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -t upload --upload-port COM11   # flash ESP32
 & "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" device monitor --port COM11         # firmware output (Ctrl+C)
 python tools\imu_check.py --port COM11 --reset     # raw ESP32 IMU readings (|a| ~ 1.0 when still)
+python tools\ppg_check.py                          # RT7015 over BLE: samples/s, AOUT/SOUT, beats (nothing saved)
 python tools\acc_check.py --port COM15 --channel 5  # raw BITalino ACC readings + calibration (Cmin/Cmax)
 
 # Recording (type marker + Enter while running; Ctrl+C to stop)
 python tools\run_session.py --subject sim --simulate --warmup-s 10 --baseline-s 20 --seconds 90   # no hardware
-python tools\run_session.py --subject t_esp --esp32 COM11 --warmup-s 10 --baseline-s 20 --seconds 60  # ESP32 only
+python tools\run_session.py --subject t_esp --esp32 COM11 --ppg none --warmup-s 10 --baseline-s 20 --seconds 60  # ESP32 only
+python tools\run_session.py --subject t_ppg --warmup-s 10 --baseline-s 20 --seconds 60                  # BLE PPG only
 python tools\run_session.py --subject t_eda --eda COM13 --warmup-s 10 --baseline-s 20 --seconds 60    # EDA only
 python tools\run_session.py --subject test01 --eda COM13 --esp32 COM11 --warmup-s 30 --baseline-s 60 # short test
 python tools\run_session.py --subject p01 --eda COM13 --esp32 COM11                                  # study (3 + 2 min baseline)
@@ -57,13 +61,16 @@ Useful `run_session.py` options: `--sinks udp` (no serial output), `--sinks none
 
 | Path | What |
 |---|---|
-| `src/main.cpp`, `platformio.ini` | ESP32-S3 firmware: IMU + PPG at 100 Hz, beat detection on the board |
+| `src/main.cpp`, `platformio.ini` | ESP32-S3 firmware: IMU + PPG at 100 Hz, beat detection on the board (PPG part unused with `--ppg ble`) |
+| `biofeedback/ppg_ble.py` | RT7015 BLE source: frame parser, sample clock, beat detection |
+| `vendor/rt7015_python/` | Manufacturer's example code, reference only (not imported) |
 | `biofeedback/` | Laptop processing (see Architecture) |
 | `biofeedback/settings.py` | **All thresholds, windows and switches in one file** |
 | `tools/run_session.py` | Main program: record all sensors and output state/arousal live |
 | `tools/replay_session.py` | Re-run the processing on a recording, write CSV + overview plot |
 | `tools/imu_check.py` | Show raw ESP32 IMU readings only (hardware check) |
 | `tools/acc_check.py` | Show raw BITalino ACC readings, measure its calibration |
+| `tools/ppg_check.py` | Connect to the RT7015 over BLE only and show samples and beats |
 | `tools/make_labels.py` | Offline: markers + `labels.yaml` → per-second labels |
 | `tools/live_plot.py`, `tools/serial_logger.py` | Older debug tools (live plot, raw ESP32 log) |
 | `Input/record_eda.py` | Stand-alone BITalino EDA recorder |
@@ -182,8 +189,10 @@ settle; press RST on the ESP32 if the IMU was showing zeros.
 ```
 BITalino (Bluetooth serial) -> EdaSource ----------------> eda
                                                          -> acc        (with --acc-channel)
-ESP32 (USB serial)          -> Esp32Source -> parse_line -> ppg, imu   (R lines, record mode)
-                                                         -> beats      (B lines)
+RT7015 (BLE, bleak)         -> PpgBleSource -> PpgStream -> ppg        (500 Hz AOUT/SOUT, with --ppg ble)
+                                                         -> beats      (detected on the laptop)
+ESP32 (USB serial)          -> Esp32Source -> parse_line -> imu        (R lines, record mode)
+                                                         -> ppg, beats (only with --ppg esp32)
                                                          -> motion     (S lines, kept in esp32_log)
    motion confidence uses acc if --acc-channel is given, else the S lines (session.json: motion_source)
 keyboard                    -> markers
@@ -205,7 +214,9 @@ keyboard                    -> markers
 1. **Features** (windows in `settings.py`):
    x1 EDA level (mean µS, 30 s), x2 EDA slope (µS/min, 60 s), x3 SCRs per minute (60 s; rise
    ≥ 0.1 µS within 5 s, counted when it falls back by half), x4 heart rate (median of valid
-   beats, 30 s). Valid beat: IBI 300–2000 ms, within 30 % of the median of the last 5 IBIs; no
+   beats, 30 s). Beats (`--ppg ble`, vendor logic): SOUT > 1500 mV is high, a rising edge is a
+   candidate, accepted if AOUT rises > 500 mV by the falling edge; IBI only between two accepted
+   beats with nothing rejected or lost in between. Valid beat: IBI 300–2000 ms, within 30 % of the median of the last 5 IBIs; no
    valid beat for 3 s → heart rate missing (z = 0). EDA: 100 Hz → 100 ms bins → 0.5 s smoothing,
    µS = ADC / 2^10 × 3.3 / 0.132 (BITalino EDA datasheet Rev B, range 0–25 µS).
 2. **Confidence** c = EDA check × motion confidence. EDA check is 0 if the link dropped, a value is
@@ -259,9 +270,9 @@ Once per second, to every sink in `--sinks` (default `serial,udp`):
 | `session.json` | ports, switches, profile and all settings used |
 | `eda.csv` | t_ms, recv_ms, sample_index, sequence, sequence_gap_mod16, eda_raw_adc, eda_us |
 | `acc.csv` | t_ms, recv_ms, sample_index, acc_raw_adc, acc_g (with `--acc-channel`; same samples as eda.csv) |
-| `ppg.csv` | t_ms, board_ms, ppg_mv, sout_mv (record mode) |
+| `ppg.csv` | `--ppg ble`: t_ms, aout_mv, sout_mv (every sample; t_ms from sample count / rate, anchored on packet receive times) · `--ppg esp32`: t_ms, board_ms, ppg_mv, sout_mv (record mode) |
 | `imu.csv` | t_ms, board_ms, ax_g, ay_g, az_g, gx_dps, gy_dps, gz_dps (record mode) |
-| `beats.csv` | t_ms, board_ms, ibi_ms, bpm (firmware beats, before the validity check) |
+| `beats.csv` | `--ppg ble`: t_ms (rising edge), confirm_ms, ibi_ms, bpm, aout_change_mv · `--ppg esp32`: t_ms, board_ms, ibi_ms, bpm (both before the validity check; ibi 0 = no previous beat) |
 | `esp32_log.csv` | t_ms, line (S motion summaries, E, P, WARN, ERROR, ...) |
 | `markers.csv` | t_ms, local_time, text |
 | `features.csv` | 1 row per second: phase, x1–x4, eda_rise, motion_rms, c_eda, c_motion, c, valid, z, p, arousal, state, mu |
@@ -285,6 +296,8 @@ the protocol markers with 60 s dropped after each change, and `self_report` from
 | IMU | real hardware: works after reset, but **drops out** (reads all zeros) after some minutes — wiring/power to be fixed |
 | Full live loop with all three sensors | not yet completed on hardware (IMU dropout, then BITalino not connected) |
 | Processing, replay = live, plot, UDP output | simulation |
-| BITalino ACC as motion source (two-channel read, acc.csv, replay = live) | simulation only; calibration values are placeholders |
+| BITalino ACC as motion source (two-channel read, acc.csv, replay = live) | simulation; ACC calibration measured on hardware (415 / 668) |
+| RT7015 over BLE (scan/connect, start/stop commands, notifications) | **not yet tested on hardware** |
+| RT7015 frame parser, sample clock, beat detection, reconnect handling, replay from ppg.csv = live | simulation and unit checks only |
 | Serial `C,...` output | sent, but nothing on the ESP32 uses it yet |
 | Self-report filter for labels, training code | not done |

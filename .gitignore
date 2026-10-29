@@ -7,3 +7,4 @@ __pycache__/
 # local recordings (participant data stays off GitHub)
 logs/
 sessions/
+.idea/

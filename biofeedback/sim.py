@@ -3,16 +3,21 @@
 Scenario (seconds from start): calm, with a 60 s stress episode every 240 s starting at 300
 (tonic EDA rises, SCRs and heart rate go up) and 4 s of arm movement every 100 s
 (seen by the ESP32 IMU and by the BITalino ACC on any input other than the EDA one).
+The BLE PPG link drops for PPG_DROP_S at PPG_DROP_AT_S.
 """
 
 import math
 import random
+import struct
+import threading
 import time
 
 from . import settings as S
 from .eda import EDA_VCC
+from .ppg_ble import ADDR_RATE, ADDR_SAMPLES, PpgStream
 
 STRESS_START_S, STRESS_EVERY_S, STRESS_LEN_S = 300, 240, 60
+PPG_DROP_AT_S, PPG_DROP_S = 200, 6
 
 
 def stress(t):
@@ -122,3 +127,69 @@ class SimTransport:
 
     def close(self):
         pass
+
+
+def rt7015_frame(addr, payload):
+    n = len(payload) + 2
+    return bytes([0xA5, n, addr, n ^ addr]) + payload + bytes([0x5A])
+
+
+class SimPpgBle(threading.Thread):
+    """Stand-in for ppg_ble.PpgBleSource: RT7015 frames at 500 Hz, 20 samples per notification,
+    board clock 0.05 % fast, 10-60 ms latency with occasional 200 ms stalls, now and then a frame
+    split over two notifications or with a broken tail, and pulse-like SOUT edges during movement
+    (small AOUT change, to be rejected). Feeds the same PpgStream as the real link."""
+
+    RATE, PER_PACKET, DRIFT = 500, 20, 1.0005
+
+    def __init__(self, clock, sink, stop):
+        super().__init__(daemon=True, name="ppg_ble")
+        self.clock, self.stop = clock, stop
+        self.stream = PpgStream(sink)
+
+    def run(self):
+        t0 = self.clock.ms()
+        self.stream.packet(t0, rt7015_frame(ADDR_RATE, bytes([S.PPG_RATES.index(self.RATE)])))
+        print("[PPG] connected to simulated RT7015")
+        n, onset, ibi, connected, carry = 0, 0.0, 0.8, True, b""
+        while not self.stop.is_set():
+            values = []
+            for _ in range(self.PER_PACKET):
+                t = n / self.RATE / self.DRIFT  # true seconds since start
+                if t >= onset + ibi:
+                    onset += ibi
+                    bpm = 70 + 12 * stress(t) + 3 * math.sin(t / 20)
+                    ibi = 60 / bpm * (1 + random.gauss(0, 0.03))
+                phase = (t - onset) / ibi
+                rising = phase < 0.15
+                aout = 1200 + (900 * phase / 0.15 if rising else 900 * math.exp(-(phase - 0.15) * 5))
+                sout = 3300 if rising else 0
+                if 96 <= t % 100:  # movement: noise and spurious SOUT pulses
+                    aout += random.gauss(0, 30)
+                    if random.random() < 0.02:
+                        sout = 3300 - sout
+                values += [round(max(0, aout) * 10), sout * 10]
+                n += 1
+            t_last = (n - 1) / self.RATE / self.DRIFT
+            latency = 200 if random.random() < 0.005 else random.uniform(10, 60)
+            delay = (t0 + t_last * 1000 + latency - self.clock.ms()) / 1000
+            if delay > 0:
+                time.sleep(delay)
+            if PPG_DROP_AT_S <= t_last < PPG_DROP_AT_S + PPG_DROP_S:
+                if connected:
+                    connected = False
+                    self.stream.disconnected()
+                    print("[PPG] simulated link drop")
+                continue  # samples lost while disconnected
+            if not connected:
+                connected = True
+                self.stream.packet(self.clock.ms(), rt7015_frame(ADDR_RATE, bytes([S.PPG_RATES.index(self.RATE)])))
+                print("[PPG] simulated link back")
+            data = carry + rt7015_frame(ADDR_SAMPLES, struct.pack(f"<{len(values)}H", *values))
+            carry = b""
+            r = random.random()
+            if r < 0.003:
+                data = data[:-1] + bytes([0])  # broken tail: frame dropped
+            elif r < 0.01:
+                data, carry = data[:30], data[30:]  # rest arrives with the next notification
+            self.stream.packet(self.clock.ms(), data)
