@@ -1,45 +1,14 @@
-"""ESP32 source: PPG and IMU arrive on one line stream and are split into separate streams.
+"""ESP32 output link: commands to the board (SerialCommandPublisher), its text lines to esp32_log.
 
 The transport only needs open(), readline() -> str ('' on timeout), write(bytes) and close(),
-so a BLE transport can replace SerialTransport without touching the parsing.
-
-Modes (sent to the firmware as one character):
-    record: 'r' -> R lines at 100 Hz (raw PPG + IMU, for offline work) plus B/E/P/S
-    live:   't' -> Teleplot lines (dropped here) plus B/E/P/S; the processing only needs B and S
+so a BLE transport can replace SerialTransport.
 """
 
 import sys
 import threading
 
-PPG_COLUMNS = ["t_ms", "board_ms", "ppg_mv", "sout_mv"]
-IMU_COLUMNS = ["t_ms", "board_ms", "ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps"]
-BEAT_COLUMNS = ["t_ms", "board_ms", "ibi_ms", "bpm"]
 LOG_COLUMNS = ["t_ms", "line"]
-MODE_CHAR = {"record": b"r", "live": b"t"}
-
-
-def parse_line(line):
-    """Splits one firmware line (src/main.cpp) into [(stream, values)].
-
-    R,board_ms,ppg_mv,sout_mv,ax,ay,az,gx,gy,gz -> ppg + imu (IMU values are nan if the read failed)
-    B,board_ms,ibi_ms,bpm                       -> beats (ibi 0 = first/invalid interval)
-    S,board_ms,acc_mean_g,motion_rms_g,gyro_rms -> motion (not saved separately) + esp32_log
-    Teleplot lines (">name:value") are dropped; everything else goes to esp32_log.
-    """
-    parts = line.split(",")
-    try:
-        if parts[0] == "R" and len(parts) == 10:
-            board_ms, v = int(parts[1]), [float(p) for p in parts[2:]]
-            return [("ppg", [board_ms] + v[:2]), ("imu", [board_ms] + v[2:])]
-        if parts[0] == "B" and len(parts) == 4:
-            return [("beats", [int(parts[1]), int(parts[2]), int(parts[3])])]
-        if parts[0] == "S" and len(parts) == 5:
-            return [("motion", [int(parts[1])] + [float(p) for p in parts[2:]]), ("esp32_log", [line])]
-    except ValueError:
-        pass
-    if line.startswith(">"):
-        return []
-    return [("esp32_log", [line])]
+QUIET_MODE = b"t"  # firmware mode without the 100 Hz raw lines; its Teleplot lines are dropped here
 
 
 class SerialTransport:
@@ -66,10 +35,11 @@ class SerialTransport:
 
 
 class Esp32Source(threading.Thread):
-    def __init__(self, transport, clock, sink, stop, mode="record", retry_s=3):
+    """Keeps the link open (reconnects) and logs what the board prints."""
+
+    def __init__(self, transport, clock, sink, stop, retry_s=3):
         super().__init__(daemon=True, name="esp32")
         self.transport, self.clock, self.sink, self.stop, self.retry_s = transport, clock, sink, stop, retry_s
-        self.mode = MODE_CHAR[mode]
         self.connected = False
         self.write_lock = threading.Lock()
 
@@ -88,17 +58,15 @@ class Esp32Source(threading.Thread):
             try:
                 self.transport.open()
                 self.connected = True
-                self.send(self.mode)
+                self.send(QUIET_MODE)
                 print("[ESP32] connected")
                 while not self.stop.is_set():
                     line = self.transport.readline()
-                    if not line:
+                    if not line or line.startswith(">"):
                         continue
-                    t = self.clock.ms()
                     if line.startswith("PPG ready"):  # board restarted in its default mode
-                        self.send(self.mode)
-                    for stream, values in parse_line(line):
-                        self.sink(stream, t, values)
+                        self.send(QUIET_MODE)
+                    self.sink("esp32_log", self.clock.ms(), [line])
             except Exception as exc:
                 print(f"[ESP32] {exc}; retrying in {self.retry_s:g} s", file=sys.stderr)
             finally:

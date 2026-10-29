@@ -1,0 +1,35 @@
+# Test protocol, read by run_session.py (step list in the terminal, live window timer and buttons).
+# Edit durations, steps, order or conditions here; no code change needed. A copy is saved in each
+# session.json, so later analysis knows which protocol a recording used.
+
+settling_minutes: 3            # electrode settling at the start, not used (also the processing warm-up)
+
+conditions:                    # marker code typed at the start of a step -> name, colour in the window
+  "0": {name: rest,     color: "#BDBDBD"}
+  "1": {name: chat,     color: "#90CAF9"}
+  "2": {name: math,     color: "#FFCC80"}
+  "3": {name: game,     color: "#EF9A9A"}
+  "4": {name: recovery, color: "#A5D6A7"}
+
+self_report:                   # typed as sr:N after each step
+  min: 1
+  max: 5
+  hint: "1 = calm ... 5 = very stressed"
+
+# Orders (choose with run_session.py --order). Default: odd subject number -> the first order,
+# even -> the second (counterbalancing).
+orders:
+  math_first:
+    - {code: "1", minutes: 4, note: "neutral chat (how you came today, breakfast); sensor hand still"}
+    - {code: "0", minutes: 3, note: "silent rest, no talking, sensor hand on the table"}
+    - {code: "2", minutes: 5, note: "mental arithmetic, timed and scored; sensor hand still"}
+    - {code: "4", minutes: 3, note: "recovery: sit quietly"}
+    - {code: "3", minutes: 5, note: "game as fast as possible, ONLY the other hand"}
+    - {code: "4", minutes: 3, note: "recovery: sit quietly"}
+  game_first:
+    - {code: "1", minutes: 4, note: "neutral chat (how you came today, breakfast); sensor hand still"}
+    - {code: "0", minutes: 3, note: "silent rest, no talking, sensor hand on the table"}
+    - {code: "3", minutes: 5, note: "game as fast as possible, ONLY the other hand"}
+    - {code: "4", minutes: 3, note: "recovery: sit quietly"}
+    - {code: "2", minutes: 5, note: "mental arithmetic, timed and scored; sensor hand still"}
+    - {code: "4", minutes: 3, note: "recovery: sit quietly"}

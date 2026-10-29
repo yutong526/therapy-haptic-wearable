@@ -1,8 +1,8 @@
-"""Simulated BITalino and ESP32 for testing without hardware, paced in real time.
+"""Simulated BITalino, RT7015 and ESP32 output link for testing without hardware, paced in real time.
 
 Scenario (seconds from start): calm, with a 60 s stress episode every 240 s starting at 300
 (tonic EDA rises, SCRs and heart rate go up) and 4 s of arm movement every 100 s
-(seen by the ESP32 IMU and by the BITalino ACC on any input other than the EDA one).
+(seen by the BITalino ACC on any input other than the EDA one, and as PPG artefacts).
 The BLE PPG link drops for PPG_DROP_S at PPG_DROP_AT_S.
 """
 
@@ -75,55 +75,19 @@ class SimBitalino:
 
 
 class SimTransport:
-    """Produces firmware lines: R at 100 Hz (record mode only), B per beat, S every second."""
+    """ESP32 output link: accepts the commands and logs each C line it receives."""
 
     def open(self):
-        self.t0 = time.monotonic()
-        self.n = 0
-        self.next_beat = 1.0
-        self.pending = []
-        self.raw = False
-        self.motion_sq = []
+        self.last = None
 
     def readline(self):
-        if self.pending:
-            return self.pending.pop(0)
-        t = self.n / 100
-        delay = self.t0 + t - time.monotonic()
-        if delay > 0:
-            time.sleep(delay)
-        self.n += 1
-        ms = int(t * 1000)
-        bpm = 70 + 12 * stress(t) + 3 * math.sin(t / 20)
-        moving = 96 <= t % 100
-        shake = 0.3 if moving else 0.005
-        acc = [random.gauss(0, shake), random.gauss(0, shake), 1 + random.gauss(0, shake)]
-        gyro = [random.gauss(0, 80 if moving else 0.5) for _ in range(3)]
-        mag = math.sqrt(sum(a * a for a in acc))
-        self.motion_sq.append((mag - 1) ** 2)
-        lines = []
-        if t >= self.next_beat:
-            ibi = 60000 / bpm * (1 + random.gauss(0, 0.03))
-            if moving:
-                ibi *= random.uniform(0.5, 1.6)  # motion artefacts
-            self.next_beat += ibi / 1000
-            lines.append(f"B,{ms},{round(ibi)},{round(60000 / ibi)}")
-        if self.n % 100 == 0:
-            rms = math.sqrt(sum(self.motion_sq) / len(self.motion_sq))
-            lines.append(f"S,{ms},{mag:.4f},{rms:.4f},{abs(gyro[0]):.3f}")
-            self.motion_sq = []
-        if self.raw:
-            ppg = 1650 + 300 * math.sin(2 * math.pi * bpm / 60 * t)
-            lines.append(f"R,{ms},{ppg:.0f},{3000 if ppg > 1800 else 100},"
-                         + ",".join(f"{a:.4f}" for a in acc) + "," + ",".join(f"{g:.3f}" for g in gyro))
-        if not lines:
-            return ""
-        self.pending = lines[1:]
-        return lines[0]
+        time.sleep(0.2)
+        line, self.last = self.last, None
+        return line or ""
 
     def write(self, data):
-        if data in (b"r", b"t"):
-            self.raw = data == b"r"
+        if data.startswith(b"C,"):
+            self.last = "got " + data.decode().strip()
 
     def close(self):
         pass

@@ -1,3 +1,0 @@
-# COM-port runtime dependencies. Install BITalino separately with --no-deps.
-numpy>1.19
-pyserial==3.5

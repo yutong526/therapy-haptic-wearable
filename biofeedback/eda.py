@@ -9,7 +9,7 @@ import threading
 
 from . import settings as S
 
-EDA_VCC = 3.3  # same transfer function as Input/record_eda.py (EDA sensor datasheet Rev B)
+EDA_VCC = 3.3  # EDA sensor datasheet Rev B (same as the earlier Input/record_eda.py)
 EDA_US_PER_VOLT = 1 / 0.132
 EDA_COLUMNS = ["t_ms", "recv_ms", "sample_index", "sequence", "sequence_gap_mod16", "eda_raw_adc", "eda_us"]
 ACC_COLUMNS = ["t_ms", "recv_ms", "sample_index", "acc_raw_adc", "acc_g"]

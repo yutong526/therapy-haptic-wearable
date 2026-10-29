@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from biofeedback import replay  # noqa: E402
 from biofeedback.pipeline import COLUMNS, STATE_NAMES  # noqa: E402
 from biofeedback.profile import load_profile  # noqa: E402
+from biofeedback.protocol import load_protocol  # noqa: E402
 from run_session import add_processing_args, make_processor, status_line  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,7 +80,7 @@ def main():
     session = Path(args.session)
     meta = json.loads((session / "session.json").read_text(encoding="utf-8"))
     # Options not given on the command line default to what the session was recorded with
-    for key in ("warmup_s", "baseline_s", "confidence", "baseline_mode"):
+    for key in ("warmup_s", "baseline_s", "confidence", "baseline_mode", "baseline_source"):
         if f"--{key.replace('_', '-')}" not in sys.argv and key in meta:
             setattr(args, key, meta[key])
     if "--no-smoothing" not in sys.argv and "smoothing" in meta:
@@ -88,7 +89,7 @@ def main():
     profile, found = load_profile(profile_path)
     print(f"Profile: {profile_path}" + ("" if found else " (not found, using defaults)"))
 
-    processor = make_processor(args, profile, meta.get("motion_source", "esp32"))
+    processor = make_processor(args, profile, meta.get("protocol") or load_protocol())
 
     def on_row(row):
         for n in processor.notices:
@@ -98,7 +99,8 @@ def main():
             print(status_line(row))
 
     rows = replay.run(processor, replay.load_events(session), args.speed, on_row)
-    tag = args.tag or f"{args.confidence}_{'smooth' if not args.no_smoothing else 'raw'}_{args.baseline_mode}"
+    tag = args.tag or (f"{args.confidence}_{'smooth' if not args.no_smoothing else 'raw'}_{args.baseline_mode}"
+                       f"_{args.baseline_source}")
     out = session / f"replay_{tag}.csv"
     with open(out, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)

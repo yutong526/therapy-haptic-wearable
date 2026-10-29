@@ -134,7 +134,7 @@ class EdaFeatures:
 
 
 class HeartRate:
-    """x4: median heart rate of the valid beats in HR_WINDOW_S. Input: IBIs (ms) from the B lines."""
+    """x4: median heart rate of the valid beats in HR_WINDOW_S. Input: IBIs (ms) of the detected beats."""
 
     def __init__(self):
         self.history = collections.deque(maxlen=S.IBI_HISTORY)  # recent in-range IBIs
@@ -163,28 +163,12 @@ class HeartRate:
 
 
 class Motion:
-    """Motion confidence from the S lines (1 s RMS of |a| - 1 g); also detects a dropped ESP32 link."""
-
-    def __init__(self):
-        self.last = None  # (t, rms)
-
-    def add(self, t, rms):
-        self.last = (t, rms)
-
-    def compute(self, now):
-        if self.last is None or now - self.last[0] > S.LINK_TIMEOUT_S * 1000 or math.isnan(self.last[1]):
-            return {"motion_rms": float("nan"), "c_motion": 0.0, "still": False}  # no link / IMU failed
-        rms = self.last[1]
-        c = (S.MOTION_HI_G - rms) / (S.MOTION_HI_G - S.MOTION_LO_G)
-        return {"motion_rms": rms, "c_motion": min(1.0, max(0.0, c)), "still": rms < S.MOTION_HARD_G}
-
-
-class AccMotion(Motion):
     """Motion confidence from the BITalino ACC (one axis, 100 Hz): standard deviation over the last
-    second of samples received. Insensitive to gravity, orientation and calibration offset."""
+    second of samples received. Insensitive to gravity, orientation and calibration offset.
+    No samples for LINK_TIMEOUT_S (BITalino link dropped) -> c_motion = 0."""
 
     def __init__(self):
-        super().__init__()
+        self.last = None  # (t, std)
         self.samples = collections.deque()  # (t, g)
 
     def add(self, t, g):
@@ -195,3 +179,10 @@ class AccMotion(Motion):
         if len(self.samples) >= S.EDA_MIN_FILL * S.EDA_RATE_HZ:
             rms = statistics.pstdev(g for _, g in self.samples)
         self.last = (t, rms)
+
+    def compute(self, now):
+        if self.last is None or now - self.last[0] > S.LINK_TIMEOUT_S * 1000 or math.isnan(self.last[1]):
+            return {"motion_rms": float("nan"), "c_motion": 0.0, "still": False}  # no link / too few samples
+        rms = self.last[1]
+        c = (S.MOTION_HI_G - rms) / (S.MOTION_HI_G - S.MOTION_LO_G)
+        return {"motion_rms": rms, "c_motion": min(1.0, max(0.0, c)), "still": rms < S.MOTION_HARD_G}

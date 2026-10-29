@@ -6,12 +6,12 @@ available at the same moment as live) and step() runs at every whole second.
 
 import csv
 import json
+import sys
 import time
 from pathlib import Path
 
 from . import settings as S
 from .eda import acquired, adc_to_g, adc_to_microsiemens, channel_bits
-from .esp32 import parse_line
 from .ppg_ble import detect_beats
 
 
@@ -27,6 +27,9 @@ def load_events(session):
     eda_channel, acc_channel = meta.get("eda_channel") or 1, meta.get("acc_channel")
     channels = acquired([eda_channel, acc_channel])
     bits = channel_bits(eda_channel, channels)
+    if meta.get("motion_source") != "bitalino" or meta.get("ppg_source") != "ble":
+        print("Warning: recorded before motion came from the BITalino ACC and PPG from BLE only; "
+              "motion confidence and/or heart rate will be missing", file=sys.stderr)
     events = []
     for r in read_csv(session / "eda.csv"):
         adc = int(r["eda_raw_adc"])  # uS recomputed from the ADC: the CSV value is rounded
@@ -48,15 +51,10 @@ def load_events(session):
         samples = [(float(r["t_ms"]), float(r["aout_mv"]), float(r["sout_mv"])) for r in read_csv(session / "ppg.csv")]
         for t, values in detect_beats(samples):
             events.append((values[0], "beats", t, values))
-    else:
-        for r in read_csv(session / "beats.csv"):
+    if (session / "markers.csv").exists():
+        for r in read_csv(session / "markers.csv"):
             t = float(r["t_ms"])
-            events.append((t, "beats", t, [int(r["board_ms"]), int(r["ibi_ms"]), int(r["bpm"])]))
-    for r in read_csv(session / "esp32_log.csv"):
-        t = float(r["t_ms"])
-        for stream, values in parse_line(r["line"]):
-            if stream == "motion":
-                events.append((t, stream, t, values))
+            events.append((t, "markers", t, [r["local_time"], r["text"]]))
     events.sort(key=lambda e: e[0])
     return events
 

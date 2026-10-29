@@ -1,0 +1,21 @@
+# Protocol for actual use in a therapy session (run_session.py --protocol config/therapy.yaml).
+# The baseline comes from the opening small talk, computed the same way as in data collection
+# (code 1 = chat, BASELINE_SOURCE in settings.py): press "1 chat" when the small talk starts and
+# "5 therapy" when the therapy proper starts. If chat is never pressed, a time-based baseline is
+# used (WARMUP_S + BASELINE_S).
+
+settling_minutes: 3            # electrodes settle while getting ready
+
+conditions:
+  "1": {name: chat,    color: "#90CAF9"}
+  "5": {name: therapy, color: "#CE93D8"}
+
+self_report:                   # optional here
+  min: 1
+  max: 5
+  hint: "1 = calm ... 5 = very stressed"
+
+orders:
+  therapy:
+    - {code: "1", minutes: 3, note: "opening small talk (neutral topics); sensor hand still"}
+    - {code: "5", minutes: 50, note: "therapy"}
