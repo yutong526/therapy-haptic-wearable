@@ -9,7 +9,8 @@ Writes <session>/features_labeled.csv: the features (features.csv, or a replay C
     sr                         self-report sr:N given at the end of that phase
     is_baseline                1 for the seconds that set mu: the phase of the baseline source in
                                use at the end (after BASELINE_SKIP_S, c >= C_BASELINE)
-A phase ends at its self-report: the seconds from sr:N to the next code (answering) are unlabelled.
+A phase ends at its self-report: the seconds from sr:N to the next code (answering) are unlabelled,
+and so are the seconds between "pause" and "resume" (or the next code / sr / end).
 
 --labels adds free-text columns from a YAML file of regex rules (see config/labels.example.yaml).
 Examples:
@@ -40,10 +41,27 @@ def read_csv(path):
         return list(csv.DictReader(f))
 
 
+def pauses_from(markers, conditions):
+    """[(start, end)] of the pauses; a pause ends at "resume" or at the next code / sr:N / end."""
+    pauses, since = [], None
+    for m in markers:
+        text, t = m["text"].strip(), float(m["t_ms"])
+        if text == "pause" and since is None:
+            since = t
+        elif since is not None and (text == "resume" or text in conditions or text == "end" or SR.match(text)):
+            pauses.append((since, t))
+            since = None
+    if since is not None:
+        pauses.append((since, float("inf")))
+    return pauses
+
+
 def phases_from(markers, conditions):
     """[{code, name, idx, start, stop, sr, after}] from the condition, sr:N and end markers.
-    stop = self-report or next code / end, whichever comes first (None = until the last row)."""
+    stop = self-report or next code / end, whichever comes first (None = until the last row).
+    A self-report within SR_LATE_S after a code / end belongs to the phase before (late answer)."""
     phases = []
+    change, change_code = None, False  # time of the last code / end, and whether it was a code
     for m in markers:
         text, t = m["text"].strip(), float(m["t_ms"])
         if text in conditions or text == "end":
@@ -52,6 +70,12 @@ def phases_from(markers, conditions):
             if text in conditions:
                 phases.append({"code": text, "name": conditions[text], "idx": len(phases) + 1, "start": t,
                                "stop": None, "sr": "", "after": phases[-1]["name"] if phases else ""})
+            change, change_code = t, text in conditions
+        elif SR.match(text) and change is not None and t - change <= S.SR_LATE_S * 1000:
+            # after a code: the phase before the current one; after end: the phase that end closed
+            k = 2 if change_code else 1
+            if len(phases) >= k:  # (none before the first phase: e.g. a mistaken press, ignored)
+                phases[-k]["sr"] = SR.match(text)[1]
         elif phases and SR.match(text) and not phases[-1]["sr"]:
             phases[-1]["sr"] = SR.match(text)[1]  # the phase that just ended (or is ending)
             if phases[-1]["stop"] is None:
@@ -59,12 +83,13 @@ def phases_from(markers, conditions):
     return phases
 
 
-def protocol_columns(rows, phases):
+def protocol_columns(rows, phases, pauses=()):
     source = rows[-1].get("baseline_source", "") if rows else ""
     for row in rows:
         t = float(row["t_ms"])
         phase = next((p for p in reversed(phases) if p["start"] <= t), None)
-        if phase is None or (phase["stop"] is not None and t >= phase["stop"]):
+        paused = any(a <= t < b for a, b in pauses)
+        if phase is None or paused or (phase["stop"] is not None and t >= phase["stop"]):
             row.update({k: "" for k in PROTOCOL_COLUMNS})
             row["is_baseline"] = 0
             continue
@@ -153,7 +178,10 @@ def main():
     markers = read_csv(session / "markers.csv")
 
     phases = phases_from(markers, conditions)
-    protocol_columns(rows, phases)
+    pauses = pauses_from(markers, conditions)
+    protocol_columns(rows, phases, pauses)
+    if pauses:
+        print(f"  pauses: {len(pauses)}, " + ", ".join(f"{a / 1000:.0f}-{b / 1000:.0f} s" for a, b in pauses))
     for p in phases:
         stop = f"{p['stop'] / 1000:.0f} s" if p["stop"] is not None else "end"
         print(f"  phase {p['idx']}: {p['code']} {p['name']:9} {p['start'] / 1000:6.0f} s - {stop:>7}"

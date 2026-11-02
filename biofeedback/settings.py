@@ -56,18 +56,31 @@ PPG_DEFAULT_RATE = 500
 PPG_CLOCK_GAIN = 0.01        # sample clock: slow correction towards later packet arrivals (drift)
 PPG_RESYNC_MS = 500          # packet this much later than its samples' predicted time -> re-anchor (gap)
 PPG_GAP_MS = 100             # larger gap between sample times -> beat detection restarts (no IBI across)
-# Beat detection (vendor logic): SOUT above this is "high"; a rising edge is a candidate beat,
-# accepted if AOUT at the falling edge minus AOUT at the rising edge exceeds PPG_MIN_PULSE_MV.
+# Beat detection method. "aout": peaks of the AOUT pulse wave (default). "sout": vendor rule on the
+# module's SOUT square wave. On p00 (2026-10-30, weak signal) HR was available 74 % (aout) vs 55 %
+# (sout) of the connected time; on p01 (2026-10-29, good signal) 96 % for both, same median HR.
+PPG_BEAT_METHOD = "aout"
+# aout: AOUT minus its mean over the last PPG_BASE_MS, smoothed over PPG_SMOOTH_MS; a beat is a local
+# maximum above 0 and above PPG_PEAK_FRAC x the largest value of the last PPG_PEAK_WINDOW_MS, at least
+# PPG_REFRACTORY_MS after the previous beat (330 ms = 180 bpm at most)
+PPG_BASE_MS = 1000
+PPG_SMOOTH_MS = 50
+PPG_PEAK_WINDOW_MS = 2000
+PPG_PEAK_FRAC = 0.5
+PPG_REFRACTORY_MS = 330
+# sout: SOUT above this is "high"; a rising edge is a candidate beat, accepted if AOUT at the falling
+# edge minus AOUT at the rising edge exceeds PPG_MIN_PULSE_MV. A rejected candidate does not break
+# the IBI chain (the vendor breaks it; keeping it gave more IBIs with the same HR on p00 and p01).
 PPG_SOUT_HIGH_MV = 1500
 PPG_MIN_PULSE_MV = 100       # vendor uses 500; on p01 (2026-10-29, median change 257 mV) 500 left HR
                              # available 8 % of the time, 100 -> 91 % with the same median HR (82)
 
 # Heart rate (one IBI per detected beat; validity decided here, not by the detector)
-IBI_MIN_MS, IBI_MAX_MS = 300, 2000
+IBI_MIN_MS, IBI_MAX_MS = 300, 1333   # 45-200 bpm; longer IBIs are mostly missed beats (was 2000)
 IBI_MAX_DEV = 0.30           # valid beat: within 30 % of the median of the last IBIs
 IBI_HISTORY = 5
 IBI_MIN_HISTORY = 3          # fewer previous IBIs than this -> beat not valid yet
-HR_MAX_GAP_S = 3             # no valid beat for this long -> hr missing (z = 0)
+HR_MAX_GAP_S = 5             # no valid beat for this long -> hr missing (z = 0); was 3 (p00: 41 -> 55 %)
 
 # Motion confidence: 1 s standard deviation of the BITalino ACC axis (g)
 MOTION_LO_G = 0.02           # (placeholder) at or below: motion confidence 1
@@ -111,10 +124,18 @@ UDP_TARGET = "127.0.0.1:5005"
 # Offline training samples (label maps, not live): after each phase change this many seconds are
 # dropped, so the 60 s feature windows (eda_slope, scr_rate) lie fully inside the new phase
 TRAIN_DROP_S = 60
+# Self-report sr:N: normally entered before the next step's code and ends its step there. Entered
+# within SR_LATE_S after a code (or end), it belongs to the step before and does not end the new one.
+SR_LATE_S = 60
 # Per-person calibration: each phase (after TRAIN_DROP_S) is split in time, first half train, second
 # half test, with a gap between so test windows overlap the train half less (docs/analysis_plan.md)
 CALIB_GAP_S = 30             # main result (test windows may still reach 30 s into the train half)
 CALIB_GAP_CHECK_S = 60       # second run for comparison (no overlap; some phases may be empty)
+SAMPLE_EVERY_S = 10          # one training sample every 10 s (AUC also reported every 60 s, no overlap)
+MIN_SAMPLE_C = 0.5           # samples with confidence below this are dropped
+TRAIN_L2 = 1.0               # L2 penalty on the weights (not the bias) of the logistic regression
+FALLBACK_MIN_BACC = 0.70     # calibrated profile rejected if test balanced accuracy is below this ...
+FALLBACK_MIN_EDA_W = 0.05    # ... or any EDA weight is below this (EDA must count towards arousal)
 # E1: calibration amount per class (calm = chat + rest train halves, task = math / game train half),
 # equal for both classes; 0 = population model only, None = the whole train half
 E1_AMOUNTS_S = (0, 30, 60, None)

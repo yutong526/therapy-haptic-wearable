@@ -1,8 +1,8 @@
 """PPG source: the RT7015 pulse module's own BLE link (bleak, asyncio in its own thread, no GUI).
 
 Emits ("ppg", t_ms, [aout_mv, sout_mv]) for every sample and ("beats", t_ms, [confirm_ms, ibi_ms,
-bpm, aout_change_mv]) for every accepted beat (t_ms = rising edge of SOUT, confirm_ms = the
-falling edge where it was accepted). PpgStream holds everything after the radio (frame parsing,
+bpm, amplitude_mv]) for every detected beat (t_ms = the beat, confirm_ms = the sample at which it
+was detected). Method in settings.PPG_BEAT_METHOD: AOUT pulse-wave peaks or the vendor SOUT rule. PpgStream holds everything after the radio (frame parsing,
 sample times, beat detection) so the simulation runs the same code, and replay runs the same
 BeatDetector on ppg.csv.
 
@@ -12,6 +12,7 @@ Frames from the module: A5, len, addr, len ^ addr, payload (len - 2 bytes), 5A.
 """
 
 import asyncio
+import collections
 import struct
 import sys
 import threading
@@ -19,7 +20,7 @@ import threading
 from . import settings as S
 
 PPG_COLUMNS = ["t_ms", "aout_mv", "sout_mv"]
-BEAT_COLUMNS = ["t_ms", "confirm_ms", "ibi_ms", "bpm", "aout_change_mv"]
+BEAT_COLUMNS = ["t_ms", "confirm_ms", "ibi_ms", "bpm", "amplitude_mv"]
 ADDR_RATE, ADDR_SAMPLES = 0x10, 0x11
 
 
@@ -106,9 +107,14 @@ class SampleClock:
         return times
 
 
-class BeatDetector:
+def _beat(t_beat, confirm, last_beat, amplitude):
+    ibi = round(t_beat - last_beat) if last_beat is not None else 0
+    return t_beat, [confirm, ibi, round(60000 / ibi) if ibi else 0, round(amplitude, 1)]
+
+
+class SoutBeatDetector:
     """Vendor rule on SOUT/AOUT (thresholds in settings.py). IBI = time since the previous accepted
-    beat, 0 if a candidate was rejected or the samples had a gap in between (chain broken)."""
+    beat, 0 after a gap in the samples. amplitude = AOUT change from the rising to the falling edge."""
 
     def __init__(self):
         self.reset()
@@ -120,7 +126,7 @@ class BeatDetector:
         self.last_beat = None   # t of the previous accepted beat
 
     def add(self, t, aout, sout):
-        """Returns (t_beat, [confirm_ms, ibi_ms, bpm, aout_change_mv]) or None."""
+        """Returns (t_beat, [confirm_ms, ibi_ms, bpm, amplitude_mv]) or None."""
         if self.last_t is not None and t - self.last_t > S.PPG_GAP_MS:
             self.reset()
         self.last_t = t
@@ -131,15 +137,79 @@ class BeatDetector:
         elif self.high and not high and self.rise is not None:
             change = aout - self.rise[1]
             if change > S.PPG_MIN_PULSE_MV:
-                t_beat = self.rise[0]
-                ibi = round(t_beat - self.last_beat) if self.last_beat is not None else 0
-                beat = (t_beat, [t, ibi, round(60000 / ibi) if ibi else 0, round(change, 1)])
-                self.last_beat = t_beat
-            else:
-                self.last_beat = None
+                beat = _beat(self.rise[0], t, self.last_beat, change)
+                self.last_beat = self.rise[0]
             self.rise = None
         self.high = high
         return beat
+
+
+class _Window:
+    """Running mean over the samples of the last span_ms."""
+
+    def __init__(self, span_ms):
+        self.span, self.items, self.total = span_ms, collections.deque(), 0.0
+
+    def add(self, t, x):
+        self.items.append((t, x))
+        self.total += x
+        while self.items[0][0] <= t - self.span:
+            self.total -= self.items.popleft()[1]
+        return self.total / len(self.items)
+
+
+class AoutBeatDetector:
+    """Peaks of the AOUT pulse wave (settings.py, PPG_BEAT_METHOD = "aout"): AOUT minus its mean over
+    the PPG_BASE_MS centred on the sample (so each sample is processed PPG_BASE_MS / 2 late), smoothed
+    over PPG_SMOOTH_MS; a beat is a local maximum above 0 and above PPG_PEAK_FRAC x the largest value of
+    the last PPG_PEAK_WINDOW_MS, at least PPG_REFRACTORY_MS after the previous beat. confirm_ms is the
+    sample at which it was detected, so live and replay agree. IBI = time since the previous beat,
+    0 after a gap. amplitude = peak height above the mean (mV)."""
+
+    def __init__(self):
+        self.reset()
+        self.last_t = None
+
+    def reset(self):
+        self.base, self.smooth = _Window(S.PPG_BASE_MS), _Window(S.PPG_SMOOTH_MS)
+        self.waiting = collections.deque()  # (t, aout) not processed yet (until PPG_BASE_MS / 2 later)
+        self.maxq = collections.deque()     # (t, x), decreasing x: running max of the last PPG_PEAK_WINDOW_MS
+        self.prev = []                      # last two (t, x)
+        self.last_beat = None
+
+    def add(self, t, aout, sout):
+        """Returns (t_beat, [confirm_ms, ibi_ms, bpm, amplitude_mv]) or None."""
+        if self.last_t is not None and t - self.last_t > S.PPG_GAP_MS:
+            self.reset()
+        self.last_t = t
+        mean = self.base.add(t, aout)  # mean of (t - PPG_BASE_MS, t] = centred on t - PPG_BASE_MS / 2
+        self.waiting.append((t, aout))
+        beat = None
+        while self.waiting and self.waiting[0][0] <= t - S.PPG_BASE_MS / 2:
+            tc, ac = self.waiting.popleft()
+            beat = self._step(tc, self.smooth.add(tc, ac - mean), t) or beat
+        return beat
+
+    def _step(self, t, x, confirm):
+        beat = None
+        if len(self.prev) == 2:
+            (_, x0), (t1, x1) = self.prev
+            if (x1 > 0 and x1 > x0 and x1 >= x and x1 > S.PPG_PEAK_FRAC * self.maxq[0][1]
+                    and (self.last_beat is None or t1 - self.last_beat > S.PPG_REFRACTORY_MS)):
+                beat = _beat(t1, confirm, self.last_beat, x1)
+                self.last_beat = t1
+        while self.maxq and self.maxq[-1][1] <= x:
+            self.maxq.pop()
+        self.maxq.append((t, x))
+        while self.maxq[0][0] <= t - S.PPG_PEAK_WINDOW_MS:
+            self.maxq.popleft()
+        self.prev = (self.prev + [(t, x)])[-2:]
+        return beat
+
+
+def BeatDetector():
+    """The detector chosen by PPG_BEAT_METHOD."""
+    return AoutBeatDetector() if S.PPG_BEAT_METHOD == "aout" else SoutBeatDetector()
 
 
 def detect_beats(samples):

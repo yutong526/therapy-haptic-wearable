@@ -20,6 +20,7 @@ from . import settings as S
 from .pipeline import STATE_NAMES
 
 SPECIAL_COLORS = {"settling": "#E0E0E0", "end": "#FFFFFF"}  # condition colours: config/protocol.yaml
+PAUSE_COLOR = "#FFF59D"
 LIGHT = {"ok": "#43A047", "slow": "#FDD835", "off": "#E53935", "wait": "#9E9E9E"}
 MARKER_COLOR = "tab:purple"
 
@@ -39,16 +40,48 @@ class Progress:
         self.index = -1          # -1 = settling, len(steps) = after the last step
         self.code = "settling"   # condition shown (may be off-protocol)
         self.start_s = 0.0
+        self.paused_since = None # pause: the countdown stops until "resume" (or the next code / sr / end)
+        self.paused_total = 0.0  # paused seconds in the current step
+        self.before_end = None   # state before "end", restored by a "resume" after it (run_session --resume)
+        self.continuing = None   # code that continues the restored step instead of starting a new one
+
+    def _unpause(self, t_s):
+        if self.paused_since is not None:
+            self.paused_total += t_s - self.paused_since
+            self.paused_since = None
 
     def marker(self, t_s, text):
-        if text == "end":
+        if text == "pause":
+            if self.paused_since is None:
+                self.paused_since = t_s
+        elif text == "resume":
+            self._unpause(t_s)
+            if self.code == "end" and self.before_end:
+                self.index, self.code, self.start_s, paused, t_end = self.before_end
+                self.paused_total = paused + (t_s - t_end)  # the stopped time does not count
+                self.continuing = self.code
+        elif text == "end":
+            self._unpause(t_s)
+            self.before_end = (self.index, self.code, self.start_s, self.paused_total, t_s)
             self.index, self.code, self.start_s = len(self.steps), "end", t_s
         elif text in self.conditions:
+            if text == self.continuing:  # same step continued after a resumed session
+                self.continuing = None
+                return
+            self.continuing = None
+            self.paused_since, self.paused_total = None, 0.0
             # next step with this code; otherwise an off-protocol condition at the same step
             later = [i for i in range(self.index + 1, len(self.steps)) if self.steps[i][0] == text]
             if later:
                 self.index = later[0]
             self.code, self.start_s = text, t_s
+        elif text.lower().startswith("sr:"):
+            self._unpause(t_s)
+
+    def elapsed(self, now_s):
+        """Seconds in the current step, without the paused time."""
+        paused = self.paused_total + (now_s - self.paused_since if self.paused_since is not None else 0)
+        return now_s - self.start_s - paused
 
     def duration_s(self):
         if self.index == -1:
@@ -182,8 +215,15 @@ class LiveWindow:
         for w in (step_lbl, cond_lbl, timer_lbl, hint_lbl):
             w.pack()
 
-        next_btn = tk.Button(panel, font=mid, command=lambda: self._send(self.protocol.next_code()))
-        next_btn.pack(fill=tk.X, pady=(4, 8))
+        buttons = tk.Frame(panel)
+        buttons.pack(fill=tk.X, pady=(4, 8))
+
+        def toggle_pause():
+            self._send("resume" if self.protocol.paused_since is not None else "pause")
+        pause_btn = tk.Button(buttons, font=mid, width=8, command=toggle_pause)
+        pause_btn.pack(side=tk.RIGHT, fill=tk.Y)
+        next_btn = tk.Button(buttons, font=mid, command=lambda: self._send(self.protocol.next_code()))
+        next_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         tk.Label(panel, text="Condition marker (also: type in terminal)", font=small, anchor="w").pack(fill=tk.X)
         row1 = tk.Frame(panel)
@@ -242,7 +282,8 @@ class LiveWindow:
             now = self.clock.ms() / 1000
             with self.lock:
                 p = self.protocol
-                code, start, dur, index, step_note = p.code, p.start_s, p.duration_s(), p.index, p.note()
+                code, dur, index, step_note = p.code, p.duration_s(), p.index, p.note()
+                elapsed, paused = p.elapsed(self.clock.ms() / 1000), p.paused_since is not None
                 nxt, steps = p.next_code(), len(p.steps)
                 row, baseline = self.row, self.baseline
                 sr = [text for _, text in self.markers if text.startswith("sr:")]
@@ -253,10 +294,9 @@ class LiveWindow:
             clock_lbl.config(text=datetime.now().strftime("%H:%M:%S"))
             session_lbl.config(text=f"session {fmt_s(now)}")
 
-            elapsed = now - start
-            over = dur is not None and elapsed > dur
+            over = dur is not None and elapsed > dur and not paused
             flash = over and int(now * 2) % 2 == 0
-            bg = "#FFFFFF" if flash else self.colors.get(code, "#FFFFFF")
+            bg = PAUSE_COLOR if paused else "#FFFFFF" if flash else self.colors.get(code, "#FFFFFF")
             for w in (block, step_lbl, cond_lbl, timer_lbl, hint_lbl):
                 w.config(bg=bg)
             if code == "settling":
@@ -266,7 +306,11 @@ class LiveWindow:
             else:
                 step_lbl.config(text=f"step {index + 1}/{steps}" if 0 <= index < steps else "")
             cond_lbl.config(text=f"{code} {self.name(code)}" if code in self.conditions else self.name(code))
-            if dur is None:
+            if paused:
+                timer_lbl.config(text="PAUSED")
+                hint_lbl.config(text=("remaining " + fmt_s(dur - elapsed) if dur is not None else "")
+                                + "\nrecording continues; these seconds are excluded. Press Resume")
+            elif dur is None:
                 timer_lbl.config(text=fmt_s(elapsed))
                 hint_lbl.config(text="" if code == "end" else "off protocol: elapsed time")
             elif over:
@@ -278,6 +322,8 @@ class LiveWindow:
                 hint_lbl.config(text=f"remaining of {fmt_s(dur)}" + (f"\n{step_note}" if step_note else ""))
             next_btn.config(text=f"Start next: {nxt} {self.name(nxt)}" if nxt != "end" else "Next: end",
                             bg=self.colors.get(nxt, "#FFFFFF"), state=tk.DISABLED if code == "end" else tk.NORMAL)
+            pause_btn.config(text="Resume" if paused else "Pause", bg="#FFF59D" if paused else "#EEEEEE",
+                             state=tk.DISABLED if code == "end" else tk.NORMAL)
             sr_lbl.config(text="given: " + " ".join(s[3:] for s in sr) if sr else "given: -")
             if last:
                 last_lbl.config(text=f"last marker {fmt_s(last[0])}: {last[1][:35]}")
@@ -391,6 +437,18 @@ class LiveWindow:
                 if b >= lo_x and c in self.colors:
                     for ax in slow:
                         bands.append(ax.axvspan(a, b, color=self.colors[c], alpha=0.35, lw=0, zorder=0))
+            # pauses (until "resume" or the next code / sr / end): hatched
+            since = None
+            for t, text in markers + [(now, "resume")]:
+                if text == "pause" and since is None:
+                    since = t
+                elif since is not None and (text == "resume" or text in self.conditions or text == "end"
+                                            or text.lower().startswith("sr:")):
+                    if t >= lo_x:
+                        for ax in slow:
+                            bands.append(ax.axvspan(since, t, facecolor="none", edgecolor="#757575",
+                                                    hatch="///", lw=0, zorder=0))
+                    since = None
 
             for t, text in markers[drawn_markers[0]:]:
                 for ax in slow:

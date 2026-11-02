@@ -8,3 +8,6 @@ __pycache__/
 logs/
 sessions/
 .idea/
+# analysis outputs and trained profiles (derived from participant data)
+results/
+profiles/

@@ -4,17 +4,19 @@ state/arousal live (UDP, and serial to the ESP32 with --esp32).
 Saves sessions/<subject>_<time>/: session.json, eda.csv, acc.csv, ppg.csv, beats.csv, esp32_log.csv,
 markers.csv, features.csv (1 row per second) and baseline.json.
 Type a marker + Enter while recording (or use the --plot window). Ctrl+C to stop. Examples:
-    python tools/run_session.py --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot
+    python tools/run_session.py --name Alex --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot
     python tools/run_session.py --subject p02 --eda COM15 --plot --order game_first
     python tools/run_session.py --subject p01 --eda COM15 --esp32 COM11       # also send state to the ESP32
     python tools/run_session.py --subject test --simulate --warmup-s 20 --baseline-s 40
+    python tools/run_session.py --resume sessions/p01_20261030_161150 --plot   # continue a stopped session
 """
 
 import argparse
+import json
 import math
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,7 +25,7 @@ from biofeedback import settings as S  # noqa: E402
 from biofeedback.clock import Clock  # noqa: E402
 from biofeedback.eda import ACC_COLUMNS, EDA_COLUMNS, EdaSource  # noqa: E402
 from biofeedback.live_window import LiveWindow  # noqa: E402
-from biofeedback import ppg_ble  # noqa: E402
+from biofeedback import ppg_ble, replay  # noqa: E402
 from biofeedback.esp32 import LOG_COLUMNS, Esp32Source, SerialTransport  # noqa: E402
 from biofeedback.pipeline import COLUMNS, STATE_NAMES, Processor  # noqa: E402
 from biofeedback.protocol import DEFAULT_PATH as PROTOCOL_PATH, default_order, load_protocol  # noqa: E402
@@ -77,6 +79,11 @@ def print_protocol(protocol, order, settling_s):
           "Notes: note:<text>")
 
 
+def safe_name(name):
+    """Folder-safe version of a name (letters, digits, - and _ kept; spaces become _)."""
+    return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name.strip()) or "unnamed"
+
+
 def marker_loop(add_marker):
     for line in sys.stdin:
         text = line.strip()
@@ -86,7 +93,12 @@ def marker_loop(add_marker):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--subject", required=True, help="participant id, used for the folder and profile")
+    ap.add_argument("--name", help="participant name: the session folder is <date>_<name>")
+    ap.add_argument("--subject", help="anonymous participant id (e.g. p01) for the analysis, the profile and the "
+                                      "counterbalanced order (default: the name)")
+    ap.add_argument("--resume", metavar="FOLDER",
+                    help="continue a stopped session in its folder: same settings (ports can be given again), "
+                         "time axis continued, state restored from the recorded data")
     ap.add_argument("--eda", help="BITalino serial port, e.g. COM13")
     ap.add_argument("--eda-channel", type=int, default=1, choices=range(1, 7), help="analog input (default A1)")
     ap.add_argument("--acc-channel", type=int, default=S.ACC_CHANNEL, choices=range(1, 7),
@@ -110,7 +122,28 @@ def main():
     ap.add_argument("--order", help="order name from the protocol file (default: odd subject number -> "
                                     "first order, even -> second)")
     args = ap.parse_args()
-    protocol = load_protocol(args.protocol)
+    meta = None
+    if args.resume:
+        meta = json.loads((Path(args.resume) / "session.json").read_text(encoding="utf-8"))
+        given = {a.split("=")[0] for a in sys.argv[1:] if a.startswith("--")}
+        for key, arg in [("name", "name"), ("subject", "subject"), ("eda_port", "eda"), ("eda_channel", "eda_channel"),
+                         ("acc_channel", "acc_channel"), ("ppg_source", "ppg"), ("ppg_address", "ppg_address"),
+                         ("esp32_port", "esp32"), ("simulate", "simulate"), ("warmup_s", "warmup_s"),
+                         ("baseline_s", "baseline_s"), ("confidence", "confidence"),
+                         ("baseline_mode", "baseline_mode"), ("baseline_source", "baseline_source"),
+                         ("order", "order")]:
+            if f"--{arg.replace('_', '-')}" not in given and meta.get(key) is not None:
+                setattr(args, arg, meta[key])
+        if "--no-smoothing" not in given and "smoothing" in meta:
+            args.no_smoothing = not meta["smoothing"]
+    elif not (args.name or args.subject):
+        ap.error("give --name (and --subject), or --resume FOLDER")
+    args.subject = args.subject or args.name
+    args.name = args.name or args.subject
+    if not args.order and not any(ch.isdigit() for ch in args.subject):
+        print(f"Note: subject {args.subject!r} has no number, so the order is not counterbalanced "
+              "automatically; give --subject pNN or --order")
+    protocol = meta["protocol"] if meta and meta.get("protocol") else load_protocol(args.protocol)
     args.order = args.order or default_order(protocol, args.subject)
     if args.order not in protocol["orders"]:
         ap.error(f"--order must be one of {', '.join(protocol['orders'])}")
@@ -125,10 +158,28 @@ def main():
     profile, found = load_profile(profile_path)
     print(f"Profile: {profile_path}" + ("" if found else " (not found, using default weights and sigma)"))
 
-    clock = Clock()
-    folder = Path(args.out) / f"{args.subject}_{clock.start_utc.astimezone():%Y%m%d_%H%M%S}"
-    recorder = Recorder(folder, clock, {
-        "subject": args.subject, "eda_port": args.eda, "eda_channel": args.eda_channel,
+    processor = make_processor(args, profile, protocol)
+    old_markers, old_end_ms, first_tick = [], 0, 1
+    if args.resume:
+        folder = Path(args.resume)
+        print(f"Restoring the state from the recorded data in {folder} ...")
+        rows = replay.run(processor, replay.load_events(folder))
+        processor.notices.clear()
+        old_markers = replay.read_csv(folder / "markers.csv")
+        old_end_ms = max([rows[-1]["t_ms"] if rows else 0] + [float(m["t_ms"]) for m in old_markers])
+        clock = Clock(datetime.fromisoformat(meta["start_utc"]))
+        first_tick = int(clock.ms() // 1000) + 1
+        print(f"  {old_end_ms / 1000:.0f} s restored, baseline in use: {processor.baseline_source}; "
+              f"stopped for {(clock.ms() - old_end_ms) / 1000:.0f} s (recorded as a pause)")
+    else:
+        clock = Clock()
+        base = Path(args.out) / f"{clock.start_utc.astimezone():%Y%m%d}_{safe_name(args.name)}"
+        folder, n = base, 1
+        while folder.exists():  # same person twice on one day
+            n += 1
+            folder = base.with_name(f"{base.name}_{n}")
+    recorder = Recorder(folder, clock, resume=bool(args.resume), meta={
+        "name": args.name, "subject": args.subject, "eda_port": args.eda, "eda_channel": args.eda_channel,
         "acc_channel": args.acc_channel, "motion_source": "bitalino",
         "ppg_source": args.ppg, "ppg_address": args.ppg_address,
         "esp32_port": args.esp32, "simulate": args.simulate,
@@ -144,7 +195,6 @@ def main():
                           ("markers", ["t_ms", "local_time", "text"]), ("features", COLUMNS)]:
         recorder.add_stream(name, columns)
 
-    processor = make_processor(args, profile, protocol)
     plot = None
     if args.plot:
         lights = {"eda": S.EDA_RATE_HZ, "acc": S.EDA_RATE_HZ} if args.eda or args.simulate else {}
@@ -154,11 +204,11 @@ def main():
                         lambda text: add_marker(text))
     marker_lock = threading.Lock()
 
-    def add_marker(text):
-        """From the terminal or the window."""
+    def add_marker(text, t=None):
+        """From the terminal or the window (t: only when resuming)."""
         with marker_lock:
-            t = clock.ms()
-            values = [datetime.now().astimezone().isoformat(), text]
+            t = clock.ms() if t is None else t
+            values = [(clock.start_utc + timedelta(milliseconds=t)).astimezone().isoformat(), text]
             recorder.write("markers", t, values)
             with lock:
                 processor.add("markers", t, values, t)
@@ -199,6 +249,22 @@ def main():
         else:
             ppg_source = ppg_ble.PpgBleSource(args.ppg_address, clock, sink, stop)
         sources.append(ppg_source)
+    if args.resume:
+        if plot:
+            for m in old_markers:  # protocol progress and marker lines in the window
+                plot.add_marker(float(m["t_ms"]), m["text"])
+        # the stopped time counts as a pause; a step ended only by "end" (no self-report) is continued
+        code, open_step = None, False
+        for m in old_markers:
+            text = m["text"].strip()
+            if text in protocol["conditions"]:
+                code, open_step = text, True
+            elif text.lower().startswith("sr:"):
+                open_step = False
+        add_marker("pause", float(old_end_ms))
+        add_marker("resume")
+        if old_markers and old_markers[-1]["text"].strip() == "end" and open_step:
+            add_marker(code)
     for s in sources:
         s.start()
     threading.Thread(target=marker_loop, args=(add_marker,), daemon=True).start()
@@ -223,8 +289,8 @@ def main():
           + (" or End in the window" if plot else "") + " to stop.")
 
     def loop():
-        tick = 1
-        while args.seconds is None or tick <= args.seconds:
+        tick = first_tick
+        while args.seconds is None or tick < first_tick + args.seconds:
             if stop.wait(max(0, tick * 1000 - clock.ms()) / 1000):
                 break
             now = tick * 1000

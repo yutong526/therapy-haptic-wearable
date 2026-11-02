@@ -50,10 +50,10 @@ Other markers: `note:<text>` for anything unusual (e.g. `note:coughed`, `note:2 
 
 ## Recording
 
-Replace `p01` with the participant id (the ACC is read on A5 by default, `--acc-channel` to change):
+Replace `<name>` with the participant's name (the folder becomes `sessions\<date>_<name>`) and `p01` with their anonymous id: odd ids do math first, even ids the game first, and the id is what the analysis uses. The ACC is read on A5 by default (`--acc-channel` to change):
 
 ```powershell
-python tools\run_session.py --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot --sinks none
+python tools\run_session.py --name <name> --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot --sinks none
 ```
 
 - `--sinks none`: no live output during data collection (no airbag feedback, which would itself
@@ -71,6 +71,10 @@ python tools\run_session.py --subject p01 --eda COM15 --ppg-address 70:15:11:69:
   instructions. When the time is up, the box flashes.
 - **Start next** button: enters the code of the next step in the protocol order. The five
   condition buttons enter any code (for corrections).
+- **Pause / Resume** button (or type `pause` / `resume`): for an interruption (e.g. fixing a
+  sensor). Recording continues, the countdown stops, the box turns yellow and the plots are
+  hatched; these seconds are left out of the labels and the baseline. The same step continues
+  after Resume. A new code, a self-report or `end` also ends a pause.
 - **Self-report** buttons 1–5 (`sr:N`), **Note** box (Enter saves `note:<text>`).
 - **Sensors:** a light per sensor (green = OK, yellow = less than half the expected rate,
   red = no data for 2 s), confidence `c`, baseline progress, state and arousal.
@@ -85,21 +89,41 @@ Everything can still be typed in the terminal instead; both go to the same `mark
 2. At the end of each step (box flashes): ask the self-report, press its number, then press
    **Start next**.
 3. After step 6 and its self-report: press **End session**. Data is saved to
-   `sessions\p01_<date_time>\`.
+   `sessions\<date>_<name>\`.
+
+### Continuing a stopped session
+
+If the program stopped too early (closed, crashed, or End pressed by mistake), continue in the
+same folder:
+
+```powershell
+python tools\run_session.py --resume sessions\<date>_<name> --plot --sinks none
+```
+
+- Subject, order, ports and settings are taken from the session (a port can be given again if
+  it changed, e.g. `--eda COM16`).
+- The recorded data is replayed first to restore the baseline and the protocol step (this takes
+  a few seconds for a long session). The time axis continues; the stopped time is recorded as a
+  pause. A step that was only ended by `end` (no self-report yet) continues with its remaining
+  time.
+- Let the electrodes settle again if they were taken off.
 
 ## After the session
 
 ```powershell
-python tools\replay_session.py sessions\p01_<date_time>
-python tools\make_labels.py sessions\p01_<date_time> --features replay_soft_smooth_gated_chat.csv
+python tools\replay_session.py sessions\<date>_<name>
+python tools\make_labels.py sessions\<date>_<name> --features replay_soft_smooth_gated_chat.csv
 ```
 
 - `replay_*.png`: overview plot (EDA, heart rate, score, state, confidence) with the markers.
 - `features_labeled.csv`: one row per second with `condition` (0 rest, 1 chat, 2 math, 3 game,
   4 recovery), `condition_name`, `phase_idx` (order of the phase), `after` (the phase before, e.g.
   recovery after math), `sr` (that phase's self-report) and `is_baseline` (seconds that set mu).
-- A phase ends at its self-report: the seconds from `sr:N` to the next code are left unlabelled,
-  so always enter the self-report **before** starting the next step.
+- A phase ends at its self-report: the seconds from `sr:N` to the next code (answering) are left
+  unlabelled. Best: enter the self-report **before** starting the next step. A self-report entered
+  within 60 s **after** a step started (`SR_LATE_S`) still counts for the step before and does not
+  end the new one; so a self-report pressed by mistake in the first minute of a step is harmless.
+  (All steps are at least 3 min, so a step's own self-report never falls in this window.)
 
 ## Notes
 

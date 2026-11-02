@@ -40,7 +40,7 @@ def main():
                 second["sout"].append(values[1])
             elif stream == "beats":
                 ok = heart.add(t, values[1])
-                print(f"  beat {t / 1000:7.2f} s  IBI {values[1]:5d} ms  AOUT change {values[3]:6.0f} mV  "
+                print(f"  beat {t / 1000:7.2f} s  IBI {values[1]:5d} ms  amplitude {values[3]:6.0f} mV  "
                       f"{'valid' if ok else 'not valid'}")
 
     source = SimPpgBle(clock, sink, stop) if args.simulate else PpgBleSource(args.address, clock, sink, stop)

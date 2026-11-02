@@ -1,0 +1,10 @@
+# Training label maps (tools/build_dataset.py). Conditions are the names in config/protocol.yaml.
+# calm -> label 0, stress -> label 1; conditions in neither list are test-only (cross-task check,
+# e.g. map A tested on game), except those in never_used. See docs/analysis_plan.md.
+
+maps:
+  A: {calm: [rest, chat], stress: [math]}
+  B: {calm: [rest, chat], stress: [game]}
+  C: {calm: [rest, chat], stress: [math, game]}
+
+never_used: [recovery]

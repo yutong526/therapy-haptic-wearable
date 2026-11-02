@@ -20,7 +20,8 @@ Offline analysis of the data collected with `docs/testing_process.md`. Numbers a
   compare false alarms during talking (`replay_session.py --baseline-source chat|rest`).
 - From the phase: first `BASELINE_SKIP_S` = 60 s dropped, then seconds with c ≥ 0.8, at least 60.
   Not enough → the phase is not used (a lower source or the time-based baseline stays).
-- The phase ends at its self-report `sr:N` (answering time is not used).
+- The phase ends at its self-report `sr:N` (answering time is not used). A self-report within
+  60 s after the next code (`SR_LATE_S`) belongs to the step before and does not end the new one.
 - During data collection there is no live output (`--sinks none`); baseline and arousal are
   computed offline by replay.
 

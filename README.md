@@ -27,18 +27,18 @@ python tools\acc_check.py --port COM15 --channel 5           # BITalino ACC read
 python tools\run_session.py --subject c01 --eda COM15 --ppg-address 70:15:11:69:00:1D --esp32 COM11 --protocol config\therapy.yaml --plot
 
 # Data collection (see docs/testing_process.md)
-python tools\run_session.py --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot
+python tools\run_session.py --name <name> --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot
 python tools\run_session.py --subject sim --simulate --warmup-s 10 --baseline-s 20 --seconds 90 --plot   # no hardware
 
 # After a session
-python tools\replay_session.py sessions\p01_<date_time>              # replay_*.csv + overview .png
-python tools\make_labels.py sessions\p01_<date_time>                # features_labeled.csv
+python tools\replay_session.py sessions\<date>_<name>              # replay_*.csv + overview .png
+python tools\make_labels.py sessions\<date>_<name>                # features_labeled.csv
 
 # Watch the UDP output (second terminal)
 python -c "import socket;s=socket.socket(2,2);s.bind(('127.0.0.1',5005));[print(s.recv(4096).decode()) for _ in iter(int,1)]"
 ```
 
-Useful `run_session.py` options: `--plot` (live window), `--order` / `--protocol` (steps from
+Useful `run_session.py` options: `--plot` (live window, with a Pause button), `--resume FOLDER` (continue a stopped session), `--order` / `--protocol` (steps from
 `config/protocol.yaml`), `--esp32 COM11` (serial output), `--ppg none`, `--sinks udp|serial|none`,
 `--send-features`, `--seconds N`, `--warmup-s`, `--baseline-s`, `--profile file.json`,
 `--confidence hard`, `--no-smoothing`, `--baseline-mode fixed|always|gated`.
@@ -135,10 +135,12 @@ ESP32 (USB serial)          <- C,state,arousal,valid,t_ms; what it prints goes t
 1. **Features** (windows in `settings.py`):
    x1 EDA level (mean µS, 30 s), x2 EDA slope (µS/min, 60 s), x3 SCRs per minute (60 s; rise
    ≥ 0.1 µS within 5 s, counted when it falls back by half), x4 heart rate (median of valid
-   beats, 30 s). Beats (vendor logic): SOUT > 1500 mV is high, a rising edge is a candidate,
-   accepted if AOUT rises > `PPG_MIN_PULSE_MV` (100 mV) by the falling edge; IBI only between two
-   accepted beats with nothing rejected or lost in between. Valid beat: IBI 300–2000 ms, within
-   30 % of the median of the last 5 IBIs; no valid beat for 3 s → heart rate missing (z = 0).
+   beats, 30 s). Beats (`PPG_BEAT_METHOD = "aout"`): peaks of the AOUT pulse wave after removing
+   its 1 s centred mean and 50 ms smoothing; a peak counts if it is above half of the largest one
+   of the last 2 s and ≥ 330 ms after the previous beat (detected 0.5 s late). `"sout"` = the
+   vendor rule on the SOUT square wave. IBI = time between consecutive beats (none across a gap
+   in the samples). Valid beat: IBI 300–1333 ms (45–200 bpm), within 30 % of the median of the
+   last 5 IBIs; no valid beat for 5 s → heart rate missing (z = 0).
    EDA: 100 Hz → 100 ms bins → 0.5 s smoothing, µS = ADC / 2^10 × 3.3 / 0.132 (BITalino EDA
    datasheet Rev B, range 0–25 µS).
 2. **Confidence** c = EDA check × motion confidence. EDA check is 0 if the link dropped, a value is
@@ -199,7 +201,7 @@ Once per second, to every sink in `--sinks` (default `serial,udp`):
 | `eda.csv` | t_ms, recv_ms, sample_index, sequence, sequence_gap_mod16, eda_raw_adc, eda_us |
 | `acc.csv` | t_ms, recv_ms, sample_index, acc_raw_adc, acc_g (same samples as eda.csv) |
 | `ppg.csv` | t_ms, aout_mv, sout_mv (every sample; t_ms from sample count / rate, anchored on packet receive times) |
-| `beats.csv` | t_ms (rising edge), confirm_ms, ibi_ms, bpm, aout_change_mv (before the validity check; ibi 0 = no previous beat) |
+| `beats.csv` | t_ms (the beat), confirm_ms (when detected), ibi_ms, bpm, amplitude_mv (before the validity check; ibi 0 = no previous beat) |
 | `esp32_log.csv` | t_ms, line (what the ESP32 prints, with `--esp32`) |
 | `markers.csv` | t_ms, local_time, text (condition codes, `sr:N`, `note:...`, `end`) |
 | `features.csv` | 1 row per second: phase, x1–x4, eda_rise, motion_rms, c_eda, c_motion, c, valid, z, p, arousal, state, mu |

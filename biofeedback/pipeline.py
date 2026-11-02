@@ -48,7 +48,8 @@ class Processor:
         self.phase = "warmup"
         self.condition, self.condition_since = None, 0  # current condition name from the markers
         self.markers_seen = False
-        self.collected = {}                 # source -> {"n": seconds, feature: [values]}
+        self.paused = False                 # between "pause" and "resume" markers: no baseline collection
+        self.collected = {}               # source -> {"n": seconds, feature: [values]}
         self.n_collected = 0                # valid seconds of the source being collected now
         self.baseline_source = "none"
         self.mu = {k: float("nan") for k in S.FEATURES}
@@ -85,8 +86,16 @@ class Processor:
             self.motion.add(t, values[-1])
         elif stream == "markers":
             text = values[-1].strip()
+            if text in ("pause", "resume"):
+                self.paused = text == "pause"
+                return
             # a phase ends at its self-report (sr:N) or at the next code / end
-            ends = text in self.conditions or text == "end" or text.lower().startswith("sr:")
+            is_sr = text.lower().startswith("sr:")
+            ends = text in self.conditions or text == "end" or is_sr
+            if ends:
+                self.paused = False
+            if is_sr and t - self.condition_since <= S.SR_LATE_S * 1000:
+                return  # self-report of the step before (entered after the new code)
             if ends:
                 if self.condition is not None:
                     self._finish_phase(self.condition)
@@ -147,7 +156,7 @@ class Processor:
             collecting = self._wanted(source) and now - self.condition_since >= S.BASELINE_SKIP_S * 1000
         else:
             source, collecting = "time", self._wanted("time") and now >= self.warmup_ms
-        if collecting and c >= S.C_BASELINE:
+        if collecting and c >= S.C_BASELINE and not self.paused:
             values = self.collected.setdefault(source, {"n": 0, **{k: [] for k in S.FEATURES}})
             values["n"] += 1
             for k in S.FEATURES:
