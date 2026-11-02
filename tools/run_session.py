@@ -4,7 +4,7 @@ state/arousal live (UDP, and serial to the ESP32 with --esp32).
 Saves sessions/<subject>_<time>/: session.json, eda.csv, acc.csv, ppg.csv, beats.csv, esp32_log.csv,
 markers.csv, features.csv (1 row per second) and baseline.json.
 Type a marker + Enter while recording (or use the --plot window). Ctrl+C to stop. Examples:
-    python tools/run_session.py --name Alex --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot
+    python tools/run_session.py --name Seona --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot
     python tools/run_session.py --subject p02 --eda COM15 --plot --order game_first
     python tools/run_session.py --subject p01 --eda COM15 --esp32 COM11       # also send state to the ESP32
     python tools/run_session.py --subject test --simulate --warmup-s 20 --baseline-s 40
