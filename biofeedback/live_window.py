@@ -413,7 +413,7 @@ class LiveWindow:
                 pump_lbl.config(text=PUMP_TEXT[pump["state"]] + (f" ({pump['reason']})" if pump["reason"] else ""),
                                 fg=PUMP_COLOR[pump["state"]] if pump["state"] != "off" else "#555555")
                 z = (" | z " + " ".join(f"{k} {row['z_' + k]:+.1f}" for k in S.FEATURES)) if row is not None else ""
-                pump_info.config(text=f"{pump['board']}\nauto: {pump['rule'] or '-'}{z}")
+                pump_info.config(text=f"{pump['board']}\n{pump['rule'] or 'control: -'}{z}")
                 changed = pump["changed"]
                 if changed is not None and mono - changed < PUMP_ALERT_S:
                     manual = pump["reason"].startswith("manual")

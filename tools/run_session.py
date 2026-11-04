@@ -233,6 +233,7 @@ def main():
     # state: "off", "hold" (constant pressure) or "breathe" (breathing assist); manual: None = protocol /
     # controller decide (they use "breathe"), else the state forced by pump:inflate / breathe / off
     pump = {"state": "off", "code_t": None, "manual": None, "wanted": "off"}
+    drive = {"mode": args.pump}  # who decides when not by hand; pump:auto turns "off" into "auto"
     # auto_steps: follows the markers like the window does, the loop enters the next code when time is up
     steps = Progress(protocol, args.order, args.warmup_s) if protocol["auto_steps"] and not args.manual_steps else None
 
@@ -248,7 +249,7 @@ def main():
             esp32.set_pump(state != "off", mode_lines.get(state, b""))
         if plot:
             plot.set_pump(state, reason)
-            if args.pump == "auto" and pump["manual"] is None:
+            if drive["mode"] == "auto" and pump["manual"] is None:
                 plot.add_marker(t, "pump:" + ("on" if state != "off" else "off"))
         print(f"*** [pump {t / 1000:.1f} s] {PUMP_LABELS[state]} ({reason}) ***")
 
@@ -268,7 +269,16 @@ def main():
             apply_pump(state, f"manual {cmd}", t)
         elif cmd == "auto":
             pump["manual"] = None
-            apply_pump(pump["wanted"], "manual released", t)
+            if drive["mode"] == "off":  # started with --pump off: the closed loop takes over
+                drive["mode"] = "auto"
+                pump["wanted"] = "breathe" if controller.on else "off"
+            reason = "auto: closed loop decides" if drive["mode"] == "auto" else "auto: protocol decides"
+            if pump["wanted"] == pump["state"]:  # nothing to switch: still say so
+                print(f"*** [pump {t / 1000:.1f} s] {reason}, {PUMP_LABELS[pump['state']]} ***")
+                if plot:
+                    plot.set_pump(pump["state"], reason)
+            else:
+                apply_pump(pump["wanted"], reason, t)
         else:
             print("Pump commands: pump:inflate, pump:breathe, pump:off, pump:auto")
 
@@ -407,10 +417,14 @@ def main():
             for p in publishers:
                 p.publish(message)
             change = controller.update(row)
-            if change and args.pump == "auto":
+            if change and drive["mode"] == "auto":
                 set_pump(*change, t=now)
             if plot:
-                plot.set_pump(None, None, controller.status(row) + ("" if args.pump == "auto" else " (not driving)"))
+                control = ("by hand (Auto: back to automatic)" if pump["manual"] else
+                           {"auto": "automatic (closed loop)", "protocol": "protocol steps",
+                            "off": "buttons only (Auto: start the closed loop)"}[drive["mode"]])
+                plot.set_pump(None, None, f"control: {control}\nauto rule: {controller.status(row)}"
+                              + ("" if drive["mode"] == "auto" else " (not driving)"))
             recorder.flush()
             for n in notices:
                 print(f"[{now / 1000:.0f} s] {n}")
