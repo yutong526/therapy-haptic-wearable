@@ -30,8 +30,8 @@ class UdpJsonPublisher:
 
 
 class SerialCommandPublisher:
-    """Sends "C,state,arousal,valid,t_ms\\n" to the ESP32 over the sensor link (Esp32Source.send).
-    The line has only digits, '.', ',' and 'C', so the firmware's 't'/'r' mode switch never fires."""
+    """Sends "C,state,arousal,valid,t_ms\\n" to the ESP32 over the pump link (Esp32Source.send).
+    The line has only digits, '.', ',', 'C' and 'nan', never the firmware's commands s / x / h."""
 
     def __init__(self, esp32_source):
         self.source = esp32_source

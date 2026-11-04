@@ -2,18 +2,15 @@
 # The baseline comes from the opening small talk, computed the same way as in data collection
 # (code 1 = chat, BASELINE_SOURCE in settings.py): press "1 chat" when the small talk starts and
 # "5 therapy" when the therapy proper starts. If chat is never pressed, a time-based baseline is
-# used (WARMUP_S + BASELINE_S).
+# used (WARMUP_S + BASELINE_S). Also the default for run_session.py --pump auto / off (demo, tests).
+# Not a data collection: no self-report.
 
 settling_minutes: 3            # electrodes settle while getting ready
+auto_steps: true               # chat and therapy start by themselves when the time is up
 
 conditions:
   "1": {name: chat,    color: "#90CAF9"}
   "5": {name: therapy, color: "#CE93D8"}
-
-self_report:                   # optional here
-  min: 1
-  max: 5
-  hint: "1 = calm ... 5 = very stressed"
 
 orders:
   therapy:

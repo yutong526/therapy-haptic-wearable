@@ -36,7 +36,9 @@ Offline analysis of the data collected with `docs/testing_process.md`. Numbers a
 ## Training samples
 
 - `TRAIN_DROP_S` = 60 s dropped after each phase change, so the 60 s feature windows lie fully
-  inside the phase. Left per phase: chat 3 min, rest 2 min, math / game 4 min, recovery 2 min.
+  inside the phase.
+- Only seconds scored against the final baseline (chat) are used, as in actual use: earlier
+  seconds (the chat phase itself and the rest before it) had z relative to a provisional baseline. Left per phase: chat 3 min, rest 2 min, math / game 4 min, recovery 2 min.
 - Label maps (to do, item 4 of the original plan): A math, B game, C math + game vs rest + chat;
   recovery never a training sample.
 

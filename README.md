@@ -6,7 +6,8 @@ sends `state, arousal, valid, t_ms` to the output side (airbag).
 - **EDA**: BITalino EDA sensor on A1 → Bluetooth → laptop, 100 Hz
 - **Motion**: BITalino ACC sensor on a second input (A5 by default, `--acc-channel`), one axis, 100 Hz
 - **PPG**: RT7015 pulse module over its own BLE link → laptop, 500 Hz AOUT + SOUT; beats detected on the laptop
-- **ESP32-S3** (optional, `--esp32`): output link only, receives `C,state,arousal,valid,t_ms`
+- **ESP32 DevKit + airbag pump** (optional, `--esp32`, `firmware/pump`): gets pump on/off and a
+  heartbeat every second (and `C,state,arousal,valid,t_ms` with the `serial` sink)
 
 ## Common commands
 
@@ -30,16 +31,30 @@ python tools\run_session.py --subject c01 --eda COM15 --ppg-address 70:15:11:69:
 python tools\run_session.py --name <name> --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot
 python tools\run_session.py --subject sim --simulate --warmup-s 10 --baseline-s 20 --seconds 90 --plot   # no hardware
 
+# Airbag test at rest, one body part per run (press 0 rest / 6 airbag; the pump follows)
+python tools\run_session.py --name <name> --site wrist --protocol config\airbag_test.yaml --eda COM15 --ppg-address 70:15:11:69:00:1D --esp32 COM11 --baseline-source rest --sinks none --plot
+python tools\analyze_airbag.py sessions\<date>_<name>_wrist [more runs ...]   # table, airbag_overview.png
+
+# Closed loop (also the demo): pump on / off from the state (settings PUMP_*); config\therapy.yaml by
+# default, steps run by themselves; Inflate / Breathe / Deflate / Auto buttons, banner + beep at each pump change
+python tools\run_session.py --name demo --eda COM15 --ppg-address 70:15:11:69:00:1D --esp32 COM16 --pump auto --plot
+
+# Demo with one click: double-click demo.bat (config\demo.yaml: 1 min settling + 2.5 min chat
+# baseline, the pump can trigger from about 3.5 min on; pump over Bluetooth, COM18; ports at its top)
+
 # After a session
 python tools\replay_session.py sessions\<date>_<name>              # replay_*.csv + overview .png
 python tools\make_labels.py sessions\<date>_<name>                # features_labeled.csv
+python tools\build_dataset.py sessions\<date>_<name>              # training samples -> results\dataset.csv
+python tools\train_person.py results\dataset.csv                  # per-person model, candidate profiles
 
 # Watch the UDP output (second terminal)
 python -c "import socket;s=socket.socket(2,2);s.bind(('127.0.0.1',5005));[print(s.recv(4096).decode()) for _ in iter(int,1)]"
 ```
 
 Useful `run_session.py` options: `--plot` (live window, with a Pause button), `--resume FOLDER` (continue a stopped session), `--order` / `--protocol` (steps from
-`config/protocol.yaml`), `--esp32 COM11` (serial output), `--ppg none`, `--sinks udp|serial|none`,
+`config/protocol.yaml` with `--pump protocol`, else `config/therapy.yaml`; a protocol without `self_report`
+is not a data collection: no self-report / marker buttons, no ML hints), `--manual-steps`, `--esp32 COM16` (airbag pump), `--pump protocol|auto|off`, `--site`, `--ppg none`, `--sinks udp|serial|none`,
 `--send-features`, `--seconds N`, `--warmup-s`, `--baseline-s`, `--profile file.json`,
 `--confidence hard`, `--no-smoothing`, `--baseline-mode fixed|always|gated`.
 `replay_session.py` takes the same processing options (e.g. `--confidence hard`, `--print`).
@@ -51,14 +66,19 @@ Useful `run_session.py` options: `--plot` (live window, with a Pause button), `-
 | `tools/run_session.py` | **Main program**: record, process and output live; `--plot` live window |
 | `tools/replay_session.py` | Re-run the processing on a recording, write CSV + overview plot |
 | `tools/make_labels.py` | Offline: markers → per-second condition, phase_idx, after, sr, is_baseline |
+| `tools/build_dataset.py`, `tools/train_person.py` | Training samples, per-person model (`docs/analysis_plan.md`) |
+| `tools/analyze_airbag.py` | Airbag test: EDA / HR / motion per block, airbag minus rest, per body part |
+| `biofeedback/pump.py` | Closed-loop pump rule (`--pump auto`) |
+| `tools/pump_console.py` | Pump by hand: commands, live pressure plot (comfort test, PI tuning) |
 | `tools/ppg_check.py`, `tools/acc_check.py` | Hardware checks: RT7015 over BLE, BITalino ACC (calibration) |
 | `biofeedback/` | Laptop processing package (see Architecture) |
 | `biofeedback/settings.py` | **All thresholds, windows and switches in one file** |
 | `config/protocol.yaml` | **Test protocol**: steps, durations, orders, condition codes, self-report range |
 | `config/therapy.yaml` | Protocol for actual use: settling, opening small talk (baseline), therapy |
+| `config/airbag_test.yaml` | Airbag test: rest / airbag blocks (`pump: true` = pump on during the condition) |
 | `config/labels.example.yaml` | Optional extra free-text label columns (`make_labels.py --labels`) |
 | `docs/testing_process.md` | How to run a test session |
-| `firmware/esp32/` | ESP32-S3 firmware (PlatformIO) for the output link |
+| `firmware/pump/` | Airbag pump firmware, classic ESP32 DevKit (Arduino IDE or PlatformIO) |
 | `vendor/` | RT7015 manual and the manufacturer's Python example, reference only (not imported) |
 | `sessions/` | Recordings (not on GitHub) |
 
@@ -85,18 +105,46 @@ new terminals then activate it automatically. Without activating, use
   Bluetooth port whose hwid contains the device address (not all zeros).
 - RT7015: no pairing needed; close the vendor app. Without `--ppg-address` the program scans for a
   name containing `RT7015`.
-- ESP32: `Silicon Labs CP210x USB to UART Bridge`.
+- ESP32 (pump): over USB, `Silicon Labs CP210x USB to UART Bridge`; or over Bluetooth: pair
+  `Airbag-ESP32` in Windows (Bluetooth settings → More Bluetooth options → COM Ports: use the
+  **Outgoing** port) and give that port to `--esp32` / `pump_console.py`. USB and Bluetooth work
+  at the same time with the same commands. A Bluetooth drop stops the pump after 5 s (heartbeat).
+  On this laptop the Bluetooth port is COM18 (hwid ends in the board's MAC + 2, 004B123E5C4E;
+  tested 2026-11-04: settings and P lines received, commands answered). Without the USB cable the
+  board needs its own power supply.
 
 ### Flashing the ESP32
 
-Connect the board's **UART** USB port, close anything using its COM port, then:
+Close anything using its COM port, then either open `firmware/pump/pump.ino` in the Arduino IDE
+(board "ESP32 Dev Module") and upload, or:
 
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -d firmware/esp32 -t upload --upload-port COM11
+& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -d firmware/pump -t upload --upload-port COM11
 ```
 
-(In VS Code's PlatformIO extension, open the `firmware/esp32` folder.) If it hangs at
-`Connecting...`: hold BOOT, press RST, release BOOT, upload again.
+If it hangs at `Connecting...`: hold BOOT, press EN, release BOOT, upload again.
+
+**Pressure control**: XGZP6847A (0–100 kPa, 0.5–4.5 V at 5 V, P = (V − 0.5) / 0.04 kPa) on GPIO34.
+Breathing (default, `b`) is open loop: after `s`, 4 s inflate pump at `a<pwm>` (default 255, off
+early at the inhale pressure `i<kPa>`, 3 kPa) and 6 s deflate pump at `d<pwm>` (default 120, off
+early at the exhale pressure `e<kPa>`, −1 kPa), repeated. (A PI controller was too weak here: the
+bag on the table reached only 0.7 kPa, 2026-11-04.) Constant pressure (`c<kPa>`): fill, then a PI
+controller at 100 Hz drives the inflate pump (output > 0) or the deflate pump (output < 0). `x` stops and deflates (pump 2) until
+below `v<kPa>` (default −1 kPa, suction; the sensor is only specified for 0–100 kPa, so readings
+below 0 are uncalibrated), below the sensor range or after 20 s. Safety in the firmware: above `MAX_KPA` (placeholder 8 kPa = 60 mmHg), sensor out
+of range or fill not reached in 90 s → stop and deflate, start blocked until the next `x`; after
+the first heartbeat `h`, 5 s without one stops the pump. Firmware placeholders to check: `MAX_KPA`,
+`PWM_MIN` (80, lowest PWM at which a pump turns), Kp 150 and Ki 20.
+
+Find comfortable targets and tune the PI with the console (live plot of pressure vs target):
+
+```powershell
+python tools\pump_console.py COM11 --name wrist
+# then type: s   c2   c3   c4   b   e1   i3   p80   n30   x   note:<text>   ?```
+
+The targets for sessions are `PUMP_EXHALE_KPA` / `PUMP_INHALE_KPA` in `settings.py` (sent on
+connect). The firmware prints `P,<ms>,<kPa>,<target>,<pwm in>,<pwm out>,<phase>` (10 Hz, logged in
+`esp32_log.csv`).
 
 ### Reading the status line
 
@@ -122,7 +170,8 @@ RT7015 (BLE, bleak)         -> PpgBleSource -> PpgStream -> ppg   (500 Hz AOUT/S
 keyboard / live window      -> markers
    every sample -> Recorder (one CSV per stream) + Processor.add (+ LiveWindow with --plot)
    every 1 s   -> Processor.step -> features.csv + output sinks (UDP, ESP32 serial)
-ESP32 (USB serial)          <- C,state,arousal,valid,t_ms; what it prints goes to esp32_log
+                                 -> pump on/off (--pump: protocol markers or PumpController) -> pump.csv
+ESP32 pump (USB serial)     <- h + s/x every second (+ C lines); what it prints goes to esp32_log
 ```
 
 - `Processor` (`biofeedback/pipeline.py`) is the same code live, in replay and in simulation;
@@ -155,7 +204,7 @@ ESP32 (USB serial)          <- C,state,arousal,valid,t_ms; what it prints goes t
 4. **Score**: z = (x − mu) / sigma, p = sigmoid(w · z + b).
 5. **Smoothing**: a ← a + 0.3 · c · (p − a) (`--no-smoothing` to turn off).
 6. **State** (0 steady, 1 rise, 2 spike, 3 state_recovery), minimum 5 s per state; spike = EDA rise
-   ≥ 0.2 µS within 10 s; rise = a ≥ 0.6 or slope z ≥ 1; after rise or spike → state_recovery until
+   ≥ 0.5 µS within 10 s; rise = a ≥ 0.8 or slope z ≥ 1; after rise or spike → state_recovery until
    a < 0.4 and the slope z ≤ 0.
 
    **Two different "recovery"s:** `state_recovery` (state 3) is computed every second and means
@@ -188,12 +237,29 @@ Once per second, to every sink in `--sinks` (default `serial,udp`):
 
 - **UDP JSON** to `127.0.0.1:5005` (`--udp` to change):
   `{"t_ms": 120000, "state": 1, "arousal": 0.634, "valid": true}`; `--send-features` adds the row.
-- **ESP32 serial** (with `--esp32`): `C,state,arousal,valid,t_ms` (e.g. `C,1,0.634,1,120000`).
-  The output side must parse it and stop the airbag after 3 s without a line.
+- **ESP32 serial** (with `--esp32`): `C,state,arousal,valid,t_ms` (e.g. `C,1,0.634,1,120000`),
+  for information; the pump firmware ignores it.
+
+Airbag pump (`--esp32`, independent of `--sinks`), `--pump`:
+
+- `protocol` (default): on during conditions with `pump: true` in the protocol file (airbag test),
+  until `sr:N`, the next code, `pause` or `end`.
+- `auto`: closed loop. On after 30 valid seconds in a row of rise / spike (once the baseline is
+  ready); on at least 60 s; off after 30 valid seconds of steady / state_recovery, or after 300 s
+  anyway; no new start for 60 s after a stop. Numbers: `PUMP_*` in `settings.py`.
+- Protocol and controller use the breathing assist (4 s inflate / 6 s deflate, `PUMP_*_PWM` and
+  `PUMP_*_KPA` in `settings.py`).
+- By hand, in any mode (window buttons, or typed like a marker, also logged as one):
+  `pump:inflate` (Inflate: fill and hold `PUMP_HOLD_KPA`), `pump:breathe` (Breathe: breathing
+  assist, the manual trigger), `pump:off` (Deflate) force the pump and the protocol / controller is
+  ignored; `pump:auto` (Auto) hands it back (the pump goes to what they want at that moment).
+  Switching between inflate and breathe does not deflate in between.
+- Every change goes to `pump.csv` (t_ms, on, mode off / hold / breathe, reason); what the board did is in `esp32_log.csv`
+  (`F,<ms>,<phase>` lines).
 
 ## Session files
 
-`sessions/<subject>_<date_time>/` (not in git):
+`sessions/<date>_<name>[_<site>]/` (not in git):
 
 | File | Columns |
 |---|---|
@@ -202,7 +268,8 @@ Once per second, to every sink in `--sinks` (default `serial,udp`):
 | `acc.csv` | t_ms, recv_ms, sample_index, acc_raw_adc, acc_g (same samples as eda.csv) |
 | `ppg.csv` | t_ms, aout_mv, sout_mv (every sample; t_ms from sample count / rate, anchored on packet receive times) |
 | `beats.csv` | t_ms (the beat), confirm_ms (when detected), ibi_ms, bpm, amplitude_mv (before the validity check; ibi 0 = no previous beat) |
-| `esp32_log.csv` | t_ms, line (what the ESP32 prints, with `--esp32`) |
+| `esp32_log.csv` | t_ms, line (what the ESP32 prints, with `--esp32`: `F` phase changes, `P` pressure, `#` info / faults) |
+| `pump.csv` | t_ms, on, reason (pump commands) |
 | `markers.csv` | t_ms, local_time, text (condition codes, `sr:N`, `note:...`, `end`) |
 | `features.csv` | 1 row per second: phase, x1–x4, eda_rise, motion_rms, c_eda, c_motion, c, valid, z, p, arousal, state, mu |
 | `baseline.json` | initial and final mu |
@@ -219,5 +286,6 @@ motion confidence and/or heart rate (a warning is printed).
 | RT7015 over BLE (connect, start command, 500 samples/s, 0 bad frames), beat detection, HR | real hardware (p01, 2026-10-29) |
 | Frame parser, sample clock, reconnect handling, replay = live | simulation and unit checks |
 | Live window (`--plot`), protocol file | simulation only |
-| ESP32 serial `C,...` output | sent; nothing on the ESP32 acts on it yet |
-| Training / analysis scripts | not done |
+| Pump firmware with pressure PI and Bluetooth serial (`firmware/pump`) | compiles; not flashed or run on the pump yet |
+| Pump link, `--pump protocol / auto`, `pump_console.py`, `analyze_airbag.py` | simulation only (simulated board, no PI) |
+| Training scripts (`build_dataset.py`, `train_person.py`) | one real session (Seona) |

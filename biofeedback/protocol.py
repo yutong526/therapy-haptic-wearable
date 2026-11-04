@@ -4,14 +4,19 @@ from pathlib import Path
 
 import yaml
 
-DEFAULT_PATH = Path(__file__).resolve().parents[1] / "config" / "protocol.yaml"
+DEFAULT_PATH = Path(__file__).resolve().parents[1] / "config" / "protocol.yaml"  # data collection
+USE_PATH = DEFAULT_PATH.with_name("therapy.yaml")  # closed loop: demo and actual use
 
 
 def load_protocol(path=DEFAULT_PATH):
-    """Returns {"settling_s", "conditions": {code: {"name", "color"}}, "self_report": {...},
-    "orders": {name: [{"code", "seconds", "note"}]}}. Raises ValueError on an inconsistent file."""
+    """Returns {"settling_s", "auto_steps", "conditions": {code: {"name", "color", "pump"}}, "self_report": {...} or
+    None (no self_report section: not a data collection; no self-report buttons or ML hints),
+    "orders": {name: [{"code", "seconds", "note"}]}}. pump: the airbag runs during this condition
+    (run_session.py --pump protocol); auto_steps: run_session.py enters the next step's code itself
+    when the time is up (and "end" after the last one). Raises ValueError on an inconsistent file."""
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    conditions = {str(code): {"name": str(c["name"]), "color": c.get("color", "#FFFFFF")}
+    conditions = {str(code): {"name": str(c["name"]), "color": c.get("color", "#FFFFFF"),
+                              "pump": bool(c.get("pump", False))}
                   for code, c in data["conditions"].items()}
     orders = {}
     for order, steps in data["orders"].items():
@@ -24,9 +29,11 @@ def load_protocol(path=DEFAULT_PATH):
                                   "note": step.get("note", "")})
     if not orders:
         raise ValueError(f"{path}: no orders")
-    sr = data.get("self_report", {})
-    return {"settling_s": round(float(data.get("settling_minutes", 3)) * 60), "conditions": conditions,
-            "self_report": {"min": int(sr.get("min", 1)), "max": int(sr.get("max", 5)), "hint": sr.get("hint", "")},
+    sr = data.get("self_report")
+    return {"settling_s": round(float(data.get("settling_minutes", 3)) * 60),
+            "auto_steps": bool(data.get("auto_steps", False)), "conditions": conditions,
+            "self_report": sr and {"min": int(sr.get("min", 1)), "max": int(sr.get("max", 5)),
+                                   "hint": sr.get("hint", "")},
             "orders": orders}
 
 

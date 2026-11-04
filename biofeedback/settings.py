@@ -100,8 +100,11 @@ VALID_C = 0.2               # valid = c >= VALID_C
 ALPHA = 0.3                  # a <- a + ALPHA * c * (p - a)
 Z_CLIP = 5.0
 MIN_DWELL_S = 5              # every state lasts at least this long
-SPIKE_RISE_US = 0.2          # (placeholder) EDA rise over SHORT_WINDOW_S -> spike
-RISE_AROUSAL = 0.6           # (placeholder) a at least this -> gradual rise
+# Rough tuning on one session (Seona 2026-10-30, default weights; EDA 5-10 uS with SCRs up to 1 uS):
+# with 0.2 / 0.6 and PUMP_START_S 5 the closed-loop pump was on ~80 % of chat and rest; with
+# 0.5 / 0.8 / 30 chat 22 %, rest 24 %, math 66 %, game 78 %. Retune with more people.
+SPIKE_RISE_US = 0.5          # (placeholder) EDA rise over SHORT_WINDOW_S -> spike (was 0.2)
+RISE_AROUSAL = 0.8           # (placeholder) a at least this -> gradual rise (was 0.6)
 RISE_SLOPE_Z = 1.0           # (placeholder) or z of eda_slope at least this -> gradual rise
 STEADY_AROUSAL = 0.4         # (placeholder) state_recovery ends when a is below this and the slope z <= 0
 
@@ -118,6 +121,26 @@ DEFAULT_LAG_S = 0            # used only to align labels in training, not live
 
 # Live output
 UDP_TARGET = "127.0.0.1:5005"
+
+# Closed-loop airbag pump (run_session.py --pump auto, biofeedback/pump.py; firmware/pump). Counted
+# in 1 s steps of the state, only after the baseline is ready (phase "run").
+PUMP_START_STATES = (1, 2)   # rise, spike: valid seconds in a row in one of these ...
+PUMP_START_S = 30            # ... this many -> pump on (5 fired on single SCRs; see SPIKE_RISE_US)
+PUMP_MIN_ON_S = 60           # on at least this long; then off after ...
+PUMP_STOP_STATES = (0, 3)    # ... PUMP_STOP_S valid seconds of steady / state_recovery
+PUMP_STOP_S = 30             # (invalid seconds, e.g. pump vibration, neither count nor reset)
+PUMP_MAX_ON_S = 300          # (placeholder) off after this long anyway; no pressure cutoff yet
+PUMP_LOCKOUT_S = 60          # no new start this long after a stop (the firmware deflates first)
+# Airbag breathing assist, sent to firmware/pump on connect (kPa gauge; 1 kPa = 7.5 mmHg). Open loop:
+# 4 s inflate pump at INHALE_PWM, 6 s deflate pump at EXHALE_PWM; the pressures only stop a pump
+# early. (placeholder) Find comfortable values with tools/pump_console.py (a / d / i / e). If the bag
+# gets fuller or flatter breath by breath, balance the two PWMs. The maximum (stop + deflate) is
+# fixed in the firmware (MAX_KPA).
+PUMP_INHALE_PWM = 255
+PUMP_EXHALE_PWM = 120        # (user, 2026-11-04)
+PUMP_INHALE_KPA = 3.0        # inflate pump off at or above this (0.7 = most reached with the bag on the table)
+PUMP_EXHALE_KPA = -1.0       # deflate pump off at or below this (negative: suction; reaches about -1)
+PUMP_HOLD_KPA = 0.6          # (placeholder; 1.0 not reached on the table) constant pressure of the window's Inflate (pump:inflate)
 
 # Test protocol (steps, durations, order, condition codes): config/protocol.yaml
 

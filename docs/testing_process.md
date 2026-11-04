@@ -125,6 +125,35 @@ python tools\make_labels.py sessions\<date>_<name> --features replay_soft_smooth
   end the new one; so a self-report pressed by mistake in the first minute of a step is harmless.
   (All steps are at least 3 min, so a step's own self-report never falls in this window.)
 
+## Airbag test (one body part per run)
+
+Effect of the airbag on EDA, heart rate and motion at rest. Steps in `config/airbag_test.yaml`
+(settling 3 min, rest 2, airbag 3, rest 3, airbag 3, rest 2 min). The steps run by themselves
+(`auto_steps: true`): `0` / `6` are entered when the time is up, `end` after the last step stops the
+recording; `Pause` stops the countdown, `--manual-steps` goes back to pressing them by hand. The pump
+starts at `6` and stops (deflates) at the next code, `sr:N`, `pause` or `end`.
+
+```powershell
+python tools\run_session.py --name <name> --site wrist --protocol config\airbag_test.yaml --eda COM15 --ppg-address 70:15:11:69:00:1D --esp32 COM16 --sinks none --plot
+python tools\analyze_airbag.py sessions\<date>_<name>_wrist
+python tools\analyze_airbag.py sessions\<date>_<name>_wrist sessions\<date>_<name>_upper_arm   # compare sites
+```
+
+- Before the first run with a bag (`tools\pump_console.py COM11 --name <site>`):
+  1. With the bag empty, `?` shows the zero offset (about 0 kPa; `z` to zero again).
+  2. `c1`, `c2`, `c3`, ... (kPa): constant pressure steps; ask the participant and log
+     `note:<site> <kPa> <comment>`. Stay well below `MAX_KPA` (8 kPa) in the firmware.
+  3. `b`, with `e` / `i` set to the chosen values: check the breaths follow the target (live
+     plot); if they lag or overshoot, change Kp (`p`) / Ki (`n`). `x`: the bag empties.
+  4. Put the chosen values in `PUMP_EXHALE_KPA` / `PUMP_INHALE_KPA` in `settings.py`; use the same
+     values for all sites, so the sites are compared at the same pressure.
+- Put the airbag on and empty before the settling time; note where the EDA electrodes and the
+  BITalino ACC are relative to the airbag (`note:...`).
+- `analyze_airbag.py` prints per block: airbag pressure (mean / max kPa), EDA mean, EDA change over the block, largest EDA rise
+  within 10 s of the start (startle), SCRs per minute, heart rate, motion, share of valid seconds;
+  and each airbag block minus the rest before it. A few blocks per site: a description, not a
+  tested effect.
+
 ## Notes
 
 - Baseline: offline, `replay_session.py --baseline-source chat` (default) or `rest` uses that phase

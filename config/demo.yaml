@@ -1,0 +1,16 @@
+# Short closed-loop demo (demo.bat, or run_session.py --protocol config/demo.yaml --pump auto).
+# Same as therapy.yaml, shorter preparation: 1 min electrode settling + 2.5 min chat as the baseline
+# (the first BASELINE_SKIP_S = 60 s of it are dropped, at least 60 valid s are needed after that),
+# so the pump can trigger from about 3.5 min on. Not a data collection: no self-report.
+
+settling_minutes: 1            # electrodes settle
+auto_steps: true               # chat and demo start by themselves when the time is up
+
+conditions:
+  "1": {name: chat, color: "#90CAF9"}
+  "5": {name: demo, color: "#CE93D8"}
+
+orders:
+  demo:
+    - {code: "1", minutes: 2.5, note: "baseline: talk calmly, sensor hand still"}
+    - {code: "5", minutes: 60, note: "closed loop: the pump starts on stress"}

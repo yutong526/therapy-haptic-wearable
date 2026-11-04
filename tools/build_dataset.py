@@ -2,7 +2,8 @@
 
 Input: session folders with features_labeled.csv (make_labels.py on a replay CSV). Output: one CSV,
 one row per sample (every SAMPLE_EVERY_S, confidence >= MIN_SAMPLE_C, not in the first TRAIN_DROP_S
-of a phase), with the z features, the label of each map in config/label_maps.yaml (0 calm, 1 stress,
+of a phase, and only once the final baseline is in use, so every z is relative to it as in actual
+use; e.g. the chat phase itself and anything before it are left out), with the z features, the label of each map in config/label_maps.yaml (0 calm, 1 stress,
 "test" = test-only condition, empty = not used) and the per-person train / test split of each phase
 (first half train, second half test, CALIB_GAP_S or CALIB_GAP_CHECK_S between them).
 Example:
@@ -43,6 +44,8 @@ def split(t, first, last, gap_ms):
 def session_samples(folder, maps, never):
     meta = json.loads((folder / "session.json").read_text(encoding="utf-8"))
     rows = read_csv(folder / "features_labeled.csv")
+    # only seconds scored against the final baseline, as in use (earlier z used a provisional mu)
+    final = rows[-1]["baseline_source"] if rows else ""
     start = {}
     for r in rows:
         if r["phase_idx"]:
@@ -51,6 +54,8 @@ def session_samples(folder, maps, never):
     for r in rows:
         t = float(r["t_ms"])
         if not r["phase_idx"] or t - start[r["phase_idx"]] < S.TRAIN_DROP_S * 1000:
+            continue
+        if r["baseline_source"] != final:
             continue
         if int(t) % (S.SAMPLE_EVERY_S * 1000) or float(r["c"]) < S.MIN_SAMPLE_C or r["phase"] != "run":
             continue

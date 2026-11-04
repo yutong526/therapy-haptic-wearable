@@ -1,12 +1,16 @@
 """Record a session from the BITalino (EDA + ACC) and the RT7015 (PPG over BLE), output
-state/arousal live (UDP, and serial to the ESP32 with --esp32).
+state/arousal live (UDP, and serial to the ESP32 with --esp32), drive the airbag pump (--esp32).
 
-Saves sessions/<subject>_<time>/: session.json, eda.csv, acc.csv, ppg.csv, beats.csv, esp32_log.csv,
-markers.csv, features.csv (1 row per second) and baseline.json.
+Saves sessions/<date>_<name>[_<site>]/: session.json, eda.csv, acc.csv, ppg.csv, beats.csv,
+esp32_log.csv, pump.csv, markers.csv, features.csv (1 row per second) and baseline.json.
+Pump (--pump): "protocol" = on during conditions marked pump: true in the protocol file (airbag
+test), "auto" = closed loop from the state (settings PUMP_*), "off".
 Type a marker + Enter while recording (or use the --plot window). Ctrl+C to stop. Examples:
     python tools/run_session.py --name Seona --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot
     python tools/run_session.py --subject p02 --eda COM15 --plot --order game_first
-    python tools/run_session.py --subject p01 --eda COM15 --esp32 COM11       # also send state to the ESP32
+    python tools/run_session.py --name Seona --site wrist --protocol config/airbag_test.yaml --esp32 COM11 \
+        --eda COM15 --baseline-source rest --sinks none --plot                 # airbag test, one body part
+    python tools/run_session.py --subject p01 --eda COM15 --esp32 COM11 --pump auto --plot   # closed loop
     python tools/run_session.py --subject test --simulate --warmup-s 20 --baseline-s 40
     python tools/run_session.py --resume sessions/p01_20261030_161150 --plot   # continue a stopped session
 """
@@ -24,18 +28,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from biofeedback import settings as S  # noqa: E402
 from biofeedback.clock import Clock  # noqa: E402
 from biofeedback.eda import ACC_COLUMNS, EDA_COLUMNS, EdaSource  # noqa: E402
-from biofeedback.live_window import LiveWindow  # noqa: E402
+from biofeedback.live_window import LiveWindow, Progress  # noqa: E402
 from biofeedback import ppg_ble, replay  # noqa: E402
 from biofeedback.esp32 import LOG_COLUMNS, Esp32Source, SerialTransport  # noqa: E402
 from biofeedback.pipeline import COLUMNS, STATE_NAMES, Processor  # noqa: E402
-from biofeedback.protocol import DEFAULT_PATH as PROTOCOL_PATH, default_order, load_protocol  # noqa: E402
+from biofeedback.protocol import DEFAULT_PATH as PROTOCOL_PATH, USE_PATH, default_order, load_protocol  # noqa: E402
 from biofeedback.profile import load_profile  # noqa: E402
 from biofeedback.publish import SerialCommandPublisher, UdpJsonPublisher  # noqa: E402
+from biofeedback.pump import PumpController  # noqa: E402
 from biofeedback.recorder import Recorder  # noqa: E402
 from biofeedback.sim import SimBitalino, SimPpgBle, SimTransport  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 STATUS_EVERY_S = 5
+PUMP_COLUMNS = ["t_ms", "on", "mode", "reason"]  # pump.csv: commanded changes (board: esp32_log F lines)
+PUMP_LABELS = {"off": "PUMP OFF", "hold": "INFLATE (constant pressure)", "breathe": "BREATHING ASSIST"}
 
 
 def add_processing_args(ap):
@@ -53,6 +60,11 @@ def add_processing_args(ap):
 
 def make_processor(args, profile, protocol):
     conditions = {code: c["name"] for code, c in protocol["conditions"].items()}
+    if args.baseline_source not in conditions.values() and S.BASELINE_PROVISIONAL in conditions.values():
+        # e.g. config/airbag_test.yaml has no chat phase
+        print(f"Note: no '{args.baseline_source}' condition in the protocol, baseline from "
+              f"'{S.BASELINE_PROVISIONAL}'")
+        args.baseline_source = S.BASELINE_PROVISIONAL
     return Processor(profile, conditions, warmup_s=args.warmup_s, baseline_s=args.baseline_s,
                      confidence_mode=args.confidence, smoothing=not args.no_smoothing,
                      baseline_mode=args.baseline_mode, baseline_source=args.baseline_source)
@@ -74,9 +86,11 @@ def print_protocol(protocol, order, settling_s):
     print(f"Protocol, order {order}: settling {settling_s / 60:.3g} min, then")
     for i, step in enumerate(protocol["orders"][order], 1):
         name = protocol["conditions"][step["code"]]["name"]
-        print(f"  {i}. type {step['code']}  {name:9} {step['seconds'] / 60:.3g} min  {step['note']}")
-    print(f"  After each step the self-report sr:{sr['min']}..sr:{sr['max']}; at the end type end. "
-          "Notes: note:<text>")
+        print(f"  {i}. {'' if protocol['auto_steps'] else 'type '}{step['code']}  {name:9} "
+              f"{step['seconds'] / 60:.3g} min  {step['note']}")
+    if sr:
+        print(f"  After each step the self-report sr:{sr['min']}..sr:{sr['max']}; at the end type end. "
+              "Notes: note:<text>")
 
 
 def safe_name(name):
@@ -103,7 +117,10 @@ def main():
     ap.add_argument("--eda-channel", type=int, default=1, choices=range(1, 7), help="analog input (default A1)")
     ap.add_argument("--acc-channel", type=int, default=S.ACC_CHANNEL, choices=range(1, 7),
                     help=f"BITalino input of the ACC sensor, for the motion confidence (default A{S.ACC_CHANNEL})")
-    ap.add_argument("--esp32", help="ESP32 serial port for the output link, e.g. COM11 (optional)")
+    ap.add_argument("--esp32", help="ESP32 (airbag pump) serial port, e.g. COM11 (optional)")
+    ap.add_argument("--pump", choices=["protocol", "auto", "off"], default="protocol",
+                    help="protocol: pump on during pump: true conditions (default); auto: closed loop; off")
+    ap.add_argument("--site", help="body part of the airbag (airbag test), saved and added to the folder name")
     ap.add_argument("--ppg", choices=["ble", "none"], default="ble",
                     help="ble: RT7015 over its own BLE link (default); none: no heart rate")
     ap.add_argument("--ppg-address", default=S.PPG_BLE_ADDRESS,
@@ -118,7 +135,10 @@ def main():
     ap.add_argument("--seconds", type=int, help="stop after this many seconds (default: until Ctrl+C)")
     ap.add_argument("--plot", action="store_true",
                     help="live window: plots, protocol timer, marker / self-report buttons, sensor lights")
-    ap.add_argument("--protocol", default=str(PROTOCOL_PATH), help="protocol file (default config/protocol.yaml)")
+    ap.add_argument("--protocol", help="protocol file (default config/protocol.yaml with --pump protocol, "
+                                       "else config/therapy.yaml)")
+    ap.add_argument("--manual-steps", action="store_true",
+                    help="enter the step codes by hand even if the protocol file has auto_steps: true")
     ap.add_argument("--order", help="order name from the protocol file (default: odd subject number -> "
                                     "first order, even -> second)")
     args = ap.parse_args()
@@ -128,7 +148,8 @@ def main():
         given = {a.split("=")[0] for a in sys.argv[1:] if a.startswith("--")}
         for key, arg in [("name", "name"), ("subject", "subject"), ("eda_port", "eda"), ("eda_channel", "eda_channel"),
                          ("acc_channel", "acc_channel"), ("ppg_source", "ppg"), ("ppg_address", "ppg_address"),
-                         ("esp32_port", "esp32"), ("simulate", "simulate"), ("warmup_s", "warmup_s"),
+                         ("esp32_port", "esp32"), ("pump_mode", "pump"), ("site", "site"),
+                         ("simulate", "simulate"), ("warmup_s", "warmup_s"),
                          ("baseline_s", "baseline_s"), ("confidence", "confidence"),
                          ("baseline_mode", "baseline_mode"), ("baseline_source", "baseline_source"),
                          ("order", "order")]:
@@ -140,10 +161,13 @@ def main():
         ap.error("give --name (and --subject), or --resume FOLDER")
     args.subject = args.subject or args.name
     args.name = args.name or args.subject
-    if not args.order and not any(ch.isdigit() for ch in args.subject):
+    args.protocol = args.protocol or str(PROTOCOL_PATH if args.pump == "protocol" else USE_PATH)
+    protocol = meta["protocol"] if meta and meta.get("protocol") else load_protocol(args.protocol)
+    protocol.setdefault("auto_steps", False)  # sessions recorded before this key
+    data_collection = bool(protocol["self_report"])  # otherwise demo / test: no ML hints
+    if data_collection and not args.order and not any(ch.isdigit() for ch in args.subject):
         print(f"Note: subject {args.subject!r} has no number, so the order is not counterbalanced "
               "automatically; give --subject pNN or --order")
-    protocol = meta["protocol"] if meta and meta.get("protocol") else load_protocol(args.protocol)
     args.order = args.order or default_order(protocol, args.subject)
     if args.order not in protocol["orders"]:
         ap.error(f"--order must be one of {', '.join(protocol['orders'])}")
@@ -156,7 +180,8 @@ def main():
 
     profile_path = Path(args.profile) if args.profile else ROOT / "profiles" / f"{args.subject}.json"
     profile, found = load_profile(profile_path)
-    print(f"Profile: {profile_path}" + ("" if found else " (not found, using default weights and sigma)"))
+    if data_collection or found:
+        print(f"Profile: {profile_path}" + ("" if found else " (not found, using default weights and sigma)"))
 
     processor = make_processor(args, profile, protocol)
     old_markers, old_end_ms, first_tick = [], 0, 1
@@ -173,7 +198,8 @@ def main():
               f"stopped for {(clock.ms() - old_end_ms) / 1000:.0f} s (recorded as a pause)")
     else:
         clock = Clock()
-        base = Path(args.out) / f"{clock.start_utc.astimezone():%Y%m%d}_{safe_name(args.name)}"
+        base = Path(args.out) / (f"{clock.start_utc.astimezone():%Y%m%d}_{safe_name(args.name)}"
+                                 + (f"_{safe_name(args.site)}" if args.site else ""))
         folder, n = base, 1
         while folder.exists():  # same person twice on one day
             n += 1
@@ -182,7 +208,7 @@ def main():
         "name": args.name, "subject": args.subject, "eda_port": args.eda, "eda_channel": args.eda_channel,
         "acc_channel": args.acc_channel, "motion_source": "bitalino",
         "ppg_source": args.ppg, "ppg_address": args.ppg_address,
-        "esp32_port": args.esp32, "simulate": args.simulate,
+        "esp32_port": args.esp32, "pump_mode": args.pump, "site": args.site, "simulate": args.simulate,
         "profile": str(profile_path), "profile_found": found, "profile_values": profile,
         "warmup_s": args.warmup_s, "baseline_s": args.baseline_s, "confidence": args.confidence,
         "smoothing": not args.no_smoothing, "baseline_mode": args.baseline_mode,
@@ -191,7 +217,7 @@ def main():
         "settings": {k: v.hex(" ") if isinstance(v, bytes) else v for k, v in vars(S).items() if k.isupper()},
     })
     for name, columns in [("eda", EDA_COLUMNS), ("acc", ACC_COLUMNS), ("ppg", ppg_ble.PPG_COLUMNS),
-                          ("beats", ppg_ble.BEAT_COLUMNS), ("esp32_log", LOG_COLUMNS),
+                          ("beats", ppg_ble.BEAT_COLUMNS), ("esp32_log", LOG_COLUMNS), ("pump", PUMP_COLUMNS),
                           ("markers", ["t_ms", "local_time", "text"]), ("features", COLUMNS)]:
         recorder.add_stream(name, columns)
 
@@ -201,8 +227,62 @@ def main():
         if args.ppg == "ble":
             lights["ppg"] = S.PPG_DEFAULT_RATE
         plot = LiveWindow(clock, f"{folder.name} ({args.order})", protocol, args.order, args.warmup_s, lights,
-                        lambda text: add_marker(text))
+                          lambda text: add_marker(text), pump_mode=args.pump if args.simulate or args.esp32 else None)
     marker_lock = threading.Lock()
+    esp32 = None
+    # state: "off", "hold" (constant pressure) or "breathe" (breathing assist); manual: None = protocol /
+    # controller decide (they use "breathe"), else the state forced by pump:inflate / breathe / off
+    pump = {"state": "off", "code_t": None, "manual": None, "wanted": "off"}
+    # auto_steps: follows the markers like the window does, the loop enters the next code when time is up
+    steps = Progress(protocol, args.order, args.warmup_s) if protocol["auto_steps"] and not args.manual_steps else None
+
+    mode_lines = {"hold": f"c{S.PUMP_HOLD_KPA:.2f}\n".encode(), "breathe": b"b\n"}  # firmware line commands
+
+    def apply_pump(state, reason, t=None):
+        if state == pump["state"]:
+            return
+        pump["state"] = state
+        t = clock.ms() if t is None else t
+        recorder.write("pump", t, [int(state != "off"), state, reason])
+        if esp32:
+            esp32.set_pump(state != "off", mode_lines.get(state, b""))
+        if plot:
+            plot.set_pump(state, reason)
+            if args.pump == "auto" and pump["manual"] is None:
+                plot.add_marker(t, "pump:" + ("on" if state != "off" else "off"))
+        print(f"*** [pump {t / 1000:.1f} s] {PUMP_LABELS[state]} ({reason}) ***")
+
+    def set_pump(on, reason, t=None):
+        """Protocol / controller (on: breathing assist); ignored while the pump is forced by hand."""
+        pump["wanted"] = "breathe" if on else "off"
+        if pump["manual"] is None:
+            apply_pump(pump["wanted"], reason, t)
+
+    def manual_pump(text, t):
+        """pump:inflate (or pump:on) / pump:breathe / pump:off force the pump in any --pump mode,
+        pump:auto hands it back."""
+        cmd = text.split(":", 1)[1].strip().lower()
+        state = {"inflate": "hold", "on": "hold", "breathe": "breathe", "off": "off"}.get(cmd)
+        if state:
+            pump["manual"] = state
+            apply_pump(state, f"manual {cmd}", t)
+        elif cmd == "auto":
+            pump["manual"] = None
+            apply_pump(pump["wanted"], "manual released", t)
+        else:
+            print("Pump commands: pump:inflate, pump:breathe, pump:off, pump:auto")
+
+    def pump_from_marker(text, t):
+        """--pump protocol: on from a pump: true code until sr:N, the next code, pause or end."""
+        cond = protocol["conditions"].get(text)
+        if cond is not None:
+            pump["code_t"] = t
+        elif text.lower().startswith("sr:"):
+            if pump["code_t"] is not None and t - pump["code_t"] <= S.SR_LATE_S * 1000:
+                return  # late self-report of the step before, as in the processing
+        elif text not in ("pause", "end"):
+            return
+        set_pump(bool(cond and cond.get("pump")), f"marker {text}", t)
 
     def add_marker(text, t=None):
         """From the terminal or the window (t: only when resuming)."""
@@ -215,6 +295,12 @@ def main():
             if plot:
                 plot.add_marker(t, text)
             print(f"[marker {t / 1000:.1f} s] {text}")
+            if steps:
+                steps.marker(t / 1000, text)
+            if text.lower().startswith("pump:"):
+                manual_pump(text, t)
+            elif args.pump == "protocol":
+                pump_from_marker(text, t)
     lock = threading.Lock()  # sources add from their threads, the main loop steps
 
     def sink(stream, t, values):
@@ -229,7 +315,6 @@ def main():
 
     stop = threading.Event()
     sources = []
-    esp32 = None
     if args.simulate or args.eda:
         if args.simulate:
             def factory(port, timeout):
@@ -240,8 +325,17 @@ def main():
                                  acc_channel=args.acc_channel))
     if args.simulate or args.esp32:
         transport = SimTransport() if args.simulate else SerialTransport(args.esp32)
-        esp32 = Esp32Source(transport, clock, recorder.write, stop)  # output link; its lines only logged
+        targets = (f"e{S.PUMP_EXHALE_KPA:.2f}\ni{S.PUMP_INHALE_KPA:.2f}\na{S.PUMP_INHALE_PWM}\n"
+                   f"d{S.PUMP_EXHALE_PWM}\nb\n").encode()  # breathing mode
+        def esp32_sink(stream, t, values):  # board lines: logged, and pressure / phase in the window
+            recorder.write(stream, t, values)
+            if plot:
+                plot.add(stream, t, values)
+        esp32 = Esp32Source(transport, clock, esp32_sink, stop, setup=targets)  # pump link
         sources.append(esp32)
+    elif args.pump != "off" and (args.pump == "auto" or any(c.get("pump") for c in protocol["conditions"].values())):
+        print("Note: no --esp32, so the pump commands are only written to pump.csv")
+    controller = PumpController()  # drives the pump only with --pump auto; otherwise shown in the window
     ppg_source = None
     if args.ppg == "ble":
         if args.simulate:
@@ -253,6 +347,9 @@ def main():
         if plot:
             for m in old_markers:  # protocol progress and marker lines in the window
                 plot.add_marker(float(m["t_ms"]), m["text"])
+        if steps:
+            for m in old_markers:
+                steps.marker(float(m["t_ms"]) / 1000, m["text"].strip())
         # the stopped time counts as a pause; a step ended only by "end" (no self-report) is continued
         code, open_step = None, False
         for m in old_markers:
@@ -282,11 +379,14 @@ def main():
             ap.error(f"unknown sink {name}")
 
     print(f"EDA on A{args.eda_channel}, motion confidence from the ACC on A{args.acc_channel}")
-    print(f"Baseline from the {args.baseline_source} phase (its code is entered at its start); "
-          f"without condition codes: the {args.baseline_s} s after the {args.warmup_s} s warm-up.")
+    print(f"Baseline from the {args.baseline_source} phase" + (" (its code is entered at its start); without "
+          f"condition codes: the {args.baseline_s} s after the {args.warmup_s} s warm-up." if data_collection else "."))
     print_protocol(protocol, args.order, args.warmup_s)
-    print(f"Recording to {folder}\nType a marker + Enter at any time (in this terminal). Ctrl+C"
-          + (" or End in the window" if plot else "") + " to stop.")
+    print(f"Recording to {folder}\n" + ("Type a marker + Enter at any time (in this terminal). "
+                                       if data_collection else "")
+          + "Ctrl+C" + (" or End in the window" if plot else "") + " to stop.")
+    if esp32:
+        print("Pump by hand: pump:inflate, pump:breathe, pump:off, pump:auto (back to --pump " + args.pump + ")")
 
     def loop():
         tick = first_tick
@@ -306,6 +406,11 @@ def main():
                 message["features"] = row
             for p in publishers:
                 p.publish(message)
+            change = controller.update(row)
+            if change and args.pump == "auto":
+                set_pump(*change, t=now)
+            if plot:
+                plot.set_pump(None, None, controller.status(row) + ("" if args.pump == "auto" else " (not driving)"))
             recorder.flush()
             for n in notices:
                 print(f"[{now / 1000:.0f} s] {n}")
@@ -314,6 +419,14 @@ def main():
                                                           "by_source": processor.mu_by_source})
             if tick % STATUS_EVERY_S == 0:
                 print(status_line(row))
+            if steps and steps.code != "end" and steps.paused_since is None:
+                duration = steps.duration_s()
+                if duration is not None and steps.elapsed(now / 1000) >= duration:
+                    nxt = steps.next_code()
+                    print(f"[auto step] {'end of the protocol' if nxt == 'end' else 'next: ' + nxt}")
+                    add_marker(nxt)
+                    if nxt == "end":
+                        break
             tick += 1
         stop.set()  # --seconds reached: also closes the plot window
 
@@ -330,6 +443,7 @@ def main():
         stop.set()
         if worker:
             worker.join()  # no feature row is written after the files are closed
+        apply_pump("off", "end of session")  # the ESP32 link also sends x when it closes
         for s in sources:
             s.join(timeout=5)
         recorder.write_json("baseline.json", {"in_use": processor.baseline_source,

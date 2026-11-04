@@ -1,0 +1,19 @@
+# Airbag effect test at rest: one body part per run (run_session.py --protocol config/airbag_test.yaml
+# --site <body part>), then tools/analyze_airbag.py. Pump on during conditions with pump: true
+# (run_session.py --pump protocol, the default). Same format as config/protocol.yaml.
+
+settling_minutes: 3            # electrode settling, airbag already in place and empty
+auto_steps: true               # the codes are entered automatically when a step's time is up
+                               # (run_session.py --manual-steps: by hand as in protocol.yaml)
+
+conditions:
+  "0": {name: rest,   color: "#BDBDBD"}
+  "6": {name: airbag, color: "#CE93D8", pump: true}
+
+orders:
+  default:
+    - {code: "0", minutes: 2, note: "rest, airbag off; sensor hand still"}
+    - {code: "6", minutes: 3, note: "airbag on (fills, then breathing); sit still"}
+    - {code: "0", minutes: 3, note: "rest, airbag deflates"}
+    - {code: "6", minutes: 3, note: "airbag on again"}
+    - {code: "0", minutes: 2, note: "rest, airbag deflates"}

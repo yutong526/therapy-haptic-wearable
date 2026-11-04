@@ -75,19 +75,63 @@ class SimBitalino:
 
 
 class SimTransport:
-    """ESP32 output link: accepts the commands and logs each C line it receives."""
+    """ESP32 pump link: answers like firmware/pump (s / x / e / i / a / d / c / b, phase and pressure
+    lines; breathing open loop, the bag pressure moving towards the stop pressures; no faults)."""
 
     def open(self):
-        self.last = None
+        self.lines, self.phase, self.since = [], "IDLE", time.monotonic()
+        self.kpa, self.exhale, self.inhale, self.buf = 0.0, -1.0, 3.0, ""
+        self.pwm_in, self.pwm_out = 255, 120
+        self.hold = None  # constant mode target (c<kPa>), None = breathing (b)
 
     def readline(self):
         time.sleep(0.2)
-        line, self.last = self.last, None
-        return line or ""
+        now = time.monotonic()
+        dt = now - self.since
+        if self.phase == "FILL" and self.kpa >= self.hold - 0.2:
+            self._change("HOLD")
+        elif self.phase in ("INHALE", "EXHALE") and self.hold is not None:
+            self._change("HOLD")
+        elif self.phase == "HOLD" and self.hold is None:
+            self._change("INHALE")
+        elif self.phase == "INHALE" and dt >= 4:
+            self._change("EXHALE")
+        elif self.phase == "EXHALE" and dt >= 6:
+            self._change("INHALE")
+        elif self.phase == "DEFLATE" and self.kpa < 0.3:
+            self._change("IDLE")
+        target = {"FILL": self.hold, "HOLD": self.hold, "INHALE": self.inhale,
+                  "EXHALE": self.exhale}.get(self.phase, 0.0)
+        pwm_in = self.pwm_in if self.phase == "INHALE" and self.kpa < self.inhale else 0
+        pwm_out = self.pwm_out if self.phase == "EXHALE" and self.kpa > self.exhale else 0
+        rate = 0.1 if self.phase in ("FILL", "INHALE", "EXHALE") else 0.5
+        self.kpa += (target - self.kpa) * rate + random.gauss(0, 0.02)
+        if not self.lines:  # one line per read: no backlog
+            self.lines.append(f"P,{int(now * 1000)},{self.kpa:.2f},{target:.2f},{pwm_in},{pwm_out},{self.phase}")
+        return self.lines.pop(0)
+
+    def _change(self, phase):
+        self.phase, self.since = phase, time.monotonic()
+        self.lines.append(f"F,{int(self.since * 1000)},{phase}")
 
     def write(self, data):
-        if data.startswith(b"C,"):
-            self.last = "got " + data.decode().strip()
+        for ch in data.decode(errors="replace"):
+            if ch in "\r\n":
+                if self.buf[:1] in ("e", "i") and len(self.buf) > 1:
+                    setattr(self, "exhale" if self.buf[0] == "e" else "inhale", float(self.buf[1:]))
+                elif self.buf[:1] in ("a", "d") and len(self.buf) > 1:
+                    setattr(self, "pwm_in" if self.buf[0] == "a" else "pwm_out", int(float(self.buf[1:])))
+                elif self.buf[:1] == "c" and len(self.buf) > 1:
+                    self.hold = float(self.buf[1:])
+                elif self.buf == "b":
+                    self.hold = None
+                self.buf = ""
+            elif self.buf or ch not in "sxh":
+                self.buf += ch
+            elif ch == "s" and self.phase == "IDLE":
+                self._change("INHALE" if self.hold is None else "FILL")
+            elif ch == "x" and self.phase not in ("IDLE", "DEFLATE"):
+                self._change("DEFLATE")
 
     def close(self):
         pass

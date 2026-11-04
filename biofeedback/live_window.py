@@ -2,8 +2,11 @@
 
 Left: what is being recorded (EDA, motion, PPG waveform with the detected beats, heart rate,
 arousal / confidence), with the background coloured by the current condition marker.
-Right: clock, current protocol step with countdown, buttons for the markers and self-reports, a
-note box, sensor lights, confidence and baseline progress, and an End button.
+Right: clock, airbag pump box (inflate / breathe / deflate / auto buttons, board pressure, what the closed-loop
+rule waits for), current protocol step with countdown, buttons for the markers and self-reports
+and a note box (only for a data collection, i.e. a protocol with self-report), sensor lights,
+confidence and baseline progress, and an End button. A pump change shows a banner for
+PUMP_ALERT_S and beeps.
 
 Display and marker input only: markers go through the same function as the terminal input, and
 nothing here feeds back into the processing.
@@ -23,6 +26,9 @@ SPECIAL_COLORS = {"settling": "#E0E0E0", "end": "#FFFFFF"}  # condition colours:
 PAUSE_COLOR = "#FFF59D"
 LIGHT = {"ok": "#43A047", "slow": "#FDD835", "off": "#E53935", "wait": "#9E9E9E"}
 MARKER_COLOR = "tab:purple"
+PUMP_ALERT_S = 10  # banner after the pump state changes
+PUMP_TEXT = {"off": "Pump off", "hold": "Inflated (constant pressure)", "breathe": "Breathing assist"}
+PUMP_COLOR = {"off": "#EF6C00", "hold": "#1565C0", "breathe": "#6A1B9A"}
 
 
 def fmt_s(s):
@@ -101,10 +107,13 @@ class Progress:
 
 
 class LiveWindow:
-    def __init__(self, clock, title, protocol, order, settling_s, streams, on_marker):
+    def __init__(self, clock, title, protocol, order, settling_s, streams, on_marker, pump_mode=None):
         """protocol: from protocol.load_protocol; streams: {name: expected samples/s} to show a light
-        for; on_marker(text) records a marker."""
+        for; on_marker(text) records a marker; pump_mode: run_session --pump with a pump link, else None.
+        A protocol without self-report (demo, tests): no step / marker / self-report buttons and no note box."""
         self.clock, self.title, self.streams, self.on_marker = clock, title, streams, on_marker
+        self.pump_mode = pump_mode
+        self.pump = {"state": "off", "reason": "", "rule": "", "board": "no board line yet", "changed": None}
         self.conditions, self.self_report = protocol["conditions"], protocol["self_report"]
         self.colors = dict(SPECIAL_COLORS, **{k: c["color"] for k, c in self.conditions.items()})
         self.lock = threading.Lock()
@@ -129,6 +138,21 @@ class LiveWindow:
                 self._push("aout", t, values[0], S.PLOT_PPG_WINDOW_S)
             elif stream == "beats":
                 self._push("beat", t, values[2], S.PLOT_WINDOW_S)  # BLE: bpm of this IBI (0 = none)
+            elif stream == "esp32_log" and values[0].startswith("P,"):
+                p = values[0].split(",")  # P,<ms>,<kPa>,<target>,<pwm in>,<pwm out>,<phase>
+                if len(p) == 7:
+                    self.pump["board"] = f"board {p[6]}: {p[2]} kPa (target {p[3]}), PWM in {p[4]} out {p[5]}"
+            elif stream == "esp32_log" and values[0].startswith("# "):
+                self.pump["board"] = values[0][2:60]  # faults and info
+
+    def set_pump(self, state, reason, rule=None):
+        """Pump state ("off" / "hold" / "breathe") and reason or, with state None, only the closed-loop
+        rule line."""
+        with self.lock:
+            if state is not None:
+                self.pump["state"], self.pump["reason"], self.pump["changed"] = state, reason, time.monotonic()
+            if rule is not None:
+                self.pump["rule"] = rule
 
     def add_row(self, row, baseline):
         t = row["t_ms"] / 1000
@@ -199,14 +223,52 @@ class LiveWindow:
         # packed first so it always stays visible at the bottom
         tk.Button(panel, text="End session", font=mid, bg="#EF9A9A", command=end).pack(side=tk.BOTTOM, fill=tk.X)
 
-        top = tk.Frame(panel)
+        # everything else scrolls when it does not fit (small screens, pump box + protocol)
+        holder = tk.Frame(panel)
+        holder.pack(fill=tk.BOTH, expand=True)
+        sc = tk.Canvas(holder, highlightthickness=0)
+        bar = tk.Scrollbar(holder, command=sc.yview)
+        sc.configure(yscrollcommand=bar.set)
+        bar.pack(side=tk.RIGHT, fill=tk.Y)
+        sc.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        body = tk.Frame(sc)
+        body_id = sc.create_window(0, 0, window=body, anchor="nw")
+        body.bind("<Configure>", lambda e: sc.configure(scrollregion=sc.bbox("all")))
+        sc.bind("<Configure>", lambda e: sc.itemconfig(body_id, width=e.width))
+
+        def wheel(e):
+            if str(e.widget).startswith(str(sc)):
+                sc.yview_scroll(-e.delta // 120, "units")
+        root.bind_all("<MouseWheel>", wheel)
+
+        top = tk.Frame(body)
         top.pack(fill=tk.X)
         clock_lbl = tk.Label(top, font=("Consolas", 16), anchor="w")
         clock_lbl.pack(side=tk.LEFT)
         session_lbl = tk.Label(top, font=small, anchor="e")
         session_lbl.pack(side=tk.RIGHT)
 
-        block = tk.Frame(panel, bd=2, relief=tk.GROOVE, pady=6)
+        if self.pump_mode:
+            box = tk.LabelFrame(body, text=f"Airbag pump (--pump {self.pump_mode})", font=small, padx=4, pady=4)
+            box.pack(fill=tk.X, pady=(8, 0))
+            pump_btns = tk.Frame(box)
+            pump_btns.pack(fill=tk.X)
+            for text, cmd, color in (("Inflate", "pump:inflate", "#90CAF9"), ("Breathe", "pump:breathe", "#B39DDB"),
+                                     ("Deflate", "pump:off", "#FFCC80"), ("Auto", "pump:auto", "#EEEEEE")):
+                tk.Button(pump_btns, text=text, font=mid, bg=color,
+                          command=lambda c=cmd: self._send(c)).pack(side=tk.LEFT, expand=True, fill=tk.X)
+            alert_lbl = tk.Label(box, font=("Segoe UI", 13, "bold"), fg="white", wraplength=wrap)
+            alerted = [None]  # change already beeped for
+            pump_lbl = tk.Label(box, font=("Segoe UI", 11, "bold"), anchor="w")
+            pump_lbl.pack(fill=tk.X)
+            pump_info = tk.Label(box, font=small, anchor="w", justify=tk.LEFT, wraplength=wrap)
+            pump_info.pack(fill=tk.X)
+            tk.Label(box, font=small, anchor="w", justify=tk.LEFT, wraplength=wrap, fg="#555555",
+                     text=f"Auto rule: rise = arousal >= {S.RISE_AROUSAL:g} or EDA slope z >= {S.RISE_SLOPE_Z:g}; "
+                          f"spike = EDA +{S.SPIKE_RISE_US:g} uS within {S.SHORT_WINDOW_S:g} s. Arousal from the z "
+                          f"(vs baseline) of EDA level, EDA slope, SCR rate and HR.").pack(fill=tk.X)
+
+        block = tk.Frame(body, bd=2, relief=tk.GROOVE, pady=6)
         block.pack(fill=tk.X, pady=(8, 4))
         step_lbl = tk.Label(block, font=small)
         cond_lbl = tk.Label(block, font=big)
@@ -215,7 +277,11 @@ class LiveWindow:
         for w in (step_lbl, cond_lbl, timer_lbl, hint_lbl):
             w.pack()
 
-        buttons = tk.Frame(panel)
+        # data collection only: step, condition and self-report buttons, note box
+        proto = tk.Frame(body)
+        if self.self_report:
+            proto.pack(fill=tk.X)
+        buttons = tk.Frame(proto)
         buttons.pack(fill=tk.X, pady=(4, 8))
 
         def toggle_pause():
@@ -225,26 +291,26 @@ class LiveWindow:
         next_btn = tk.Button(buttons, font=mid, command=lambda: self._send(self.protocol.next_code()))
         next_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        tk.Label(panel, text="Condition marker (also: type in terminal)", font=small, anchor="w").pack(fill=tk.X)
-        row1 = tk.Frame(panel)
+        tk.Label(proto, text="Condition marker (also: type in terminal)", font=small, anchor="w").pack(fill=tk.X)
+        row1 = tk.Frame(proto)
         row1.pack(fill=tk.X)
         for code, c in self.conditions.items():
             tk.Button(row1, text=f"{code}\n{c['name']}", bg=c["color"], font=small, width=6,
                       command=lambda c=code: self._send(c)).pack(side=tk.LEFT, expand=True, fill=tk.X)
 
-        sr_range = self.self_report
-        tk.Label(panel, text=f"Self-report sr:N ({sr_range['hint']})", font=small, anchor="w",
+        sr_range = self.self_report or {"min": 1, "max": 0, "hint": ""}
+        tk.Label(proto, text=f"Self-report sr:N ({sr_range['hint']})", font=small, anchor="w",
                  wraplength=wrap, justify=tk.LEFT).pack(fill=tk.X, pady=(8, 0))
-        row2 = tk.Frame(panel)
+        row2 = tk.Frame(proto)
         row2.pack(fill=tk.X)
         for n in range(sr_range["min"], sr_range["max"] + 1):
             tk.Button(row2, text=str(n), font=mid, width=3,
                       command=lambda n=n: self._send(f"sr:{n}")).pack(side=tk.LEFT, expand=True, fill=tk.X)
-        sr_lbl = tk.Label(panel, font=small, anchor="w", fg="#555555")
+        sr_lbl = tk.Label(proto, font=small, anchor="w", fg="#555555")
         sr_lbl.pack(fill=tk.X)
 
-        tk.Label(panel, text="Note (Enter to save)", font=small, anchor="w").pack(fill=tk.X, pady=(8, 0))
-        note = tk.Entry(panel, font=small)
+        tk.Label(proto, text="Note (Enter to save)", font=small, anchor="w").pack(fill=tk.X, pady=(8, 0))
+        note = tk.Entry(proto, font=small)
         note.pack(fill=tk.X)
 
         def save_note(_event=None):
@@ -253,12 +319,12 @@ class LiveWindow:
                 self._send(f"note:{text}")
                 note.delete(0, tk.END)
         note.bind("<Return>", save_note)
-        last_lbl = tk.Label(panel, font=small, anchor="w", fg="#555555")
+        last_lbl = tk.Label(proto, font=small, anchor="w", fg="#555555")
         last_lbl.pack(fill=tk.X)
 
-        tk.Label(panel, text="Sensors (samples/s)", font=small, anchor="w").pack(fill=tk.X, pady=(6, 0))
+        tk.Label(body, text="Sensors (samples/s)", font=small, anchor="w").pack(fill=tk.X, pady=(6, 0))
         lights = {}
-        f = tk.Frame(panel)
+        f = tk.Frame(body)
         f.pack(fill=tk.X)
         for stream in self.streams:
             dot = tk.Label(f, text="●", font=("Segoe UI", 12), fg=LIGHT["wait"])
@@ -266,7 +332,7 @@ class LiveWindow:
             txt = tk.Label(f, font=small, anchor="w")
             txt.pack(side=tk.LEFT, padx=(0, 6))
             lights[stream] = (dot, txt)
-        quality_lbl = tk.Label(panel, font=small, anchor="w", justify=tk.LEFT)
+        quality_lbl = tk.Label(body, font=small, anchor="w", justify=tk.LEFT)
         quality_lbl.pack(fill=tk.X, pady=(4, 0))
 
         def on_close():
@@ -286,6 +352,7 @@ class LiveWindow:
                 elapsed, paused = p.elapsed(self.clock.ms() / 1000), p.paused_since is not None
                 nxt, steps = p.next_code(), len(p.steps)
                 row, baseline = self.row, self.baseline
+                pump = dict(self.pump)
                 sr = [text for _, text in self.markers if text.startswith("sr:")]
                 last = self.markers[-1] if self.markers else None
                 mono = time.monotonic()
@@ -342,6 +409,25 @@ class LiveWindow:
                 dot.config(fg=LIGHT[state])
                 txt.config(text=f"{stream} {n}" + (f" (none {age:.0f} s)" if state == "off" else "")
                            if age is not None else f"{stream} -")
+            if self.pump_mode:
+                pump_lbl.config(text=PUMP_TEXT[pump["state"]] + (f" ({pump['reason']})" if pump["reason"] else ""),
+                                fg=PUMP_COLOR[pump["state"]] if pump["state"] != "off" else "#555555")
+                z = (" | z " + " ".join(f"{k} {row['z_' + k]:+.1f}" for k in S.FEATURES)) if row is not None else ""
+                pump_info.config(text=f"{pump['board']}\nauto: {pump['rule'] or '-'}{z}")
+                changed = pump["changed"]
+                if changed is not None and mono - changed < PUMP_ALERT_S:
+                    manual = pump["reason"].startswith("manual")
+                    what = PUMP_TEXT[pump["state"]].upper() + (" (by hand)" if manual else "")
+                    flash = int((mono - changed) * 2) % 2 == 0
+                    color = PUMP_COLOR[pump["state"]] if flash else "#555555"
+                    alert_lbl.config(text=f"{what}\n{pump['reason']}", bg=color)
+                    if not alert_lbl.winfo_ismapped():
+                        alert_lbl.pack(fill=tk.X, before=pump_lbl, pady=(4, 2))
+                    if alerted[0] != changed:
+                        alerted[0] = changed
+                        root.bell()
+                elif alert_lbl.winfo_ismapped():
+                    alert_lbl.pack_forget()
             if row is not None:
                 quality_lbl.config(text=f"confidence c {row['c']:.2f} (eda {row['c_eda']:.0f}, "
                                         f"motion {row['c_motion']:.2f})\nbaseline {baseline}\n"
