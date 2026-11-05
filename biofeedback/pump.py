@@ -10,7 +10,7 @@ from .pipeline import STATE_NAMES
 class PumpController:
     def __init__(self):
         self.on = False
-        self.start_run = 0      # valid seconds in a row in a start state
+        self.start_run = 0      # valid seconds in a start state since the last other valid state
         self.stop_run = 0       # valid seconds of a stop state since the last other valid state
         self.on_at = None
         self.off_at = None
@@ -22,7 +22,8 @@ class PumpController:
             self.start_run = 0
             valid = False  # no baseline yet: nothing counts
         if not self.on:
-            self.start_run = self.start_run + 1 if valid and state in S.PUMP_START_STATES else 0
+            if valid:  # invalid seconds (e.g. a hand movement) neither count nor reset
+                self.start_run = self.start_run + 1 if state in S.PUMP_START_STATES else 0
             locked = self.off_at is not None and t - self.off_at < S.PUMP_LOCKOUT_S * 1000
             if self.start_run >= S.PUMP_START_S and not locked:
                 self.on, self.on_at, self.stop_run = True, t, 0

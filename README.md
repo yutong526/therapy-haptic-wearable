@@ -35,12 +35,20 @@ python tools\run_session.py --subject sim --simulate --warmup-s 10 --baseline-s 
 python tools\run_session.py --name <name> --site wrist --protocol config\airbag_test.yaml --eda COM15 --ppg-address 70:15:11:69:00:1D --esp32 COM11 --baseline-source rest --sinks none --plot
 python tools\analyze_airbag.py sessions\<date>_<name>_wrist [more runs ...]   # table, airbag_overview.png
 
+# Control test: double-click control_test.bat (name only; same window as the demo). Notes note:math /
+# note:english ... note:end mark the tasks; the airbag may start in one of them only (alternates per session)
+python tools\analyze_control.py sessions\<date>_<name> [more sessions ...]   # aligned on the (would-be) trigger
+
 # Closed loop (also the demo): pump on / off from the state (settings PUMP_*); config\therapy.yaml by
 # default, steps run by themselves; Inflate / Breathe / Deflate / Auto buttons, banner + beep at each pump change
 python tools\run_session.py --name demo --eda COM15 --ppg-address 70:15:11:69:00:1D --esp32 COM16 --pump auto --plot
 
-# Demo with one click: double-click demo.bat (config\demo.yaml: 1 min settling + 2.5 min chat
-# baseline, the pump can trigger from about 3.5 min on; pump over Bluetooth, COM18; ports at its top)
+# Demo with one click: double-click demo.bat, type a name (saved to sessions\<date>_<name>).
+# config\demo.yaml: 1 min settling + 2.5 min chat baseline, the pump can trigger from about 3.5 min on;
+# pump over Bluetooth, COM18; ports at the top of the .bat. Notes: note box in the window or note:<text>
+
+# Screenshot of the live window at any moment of a recording (rule: show what the closed loop decided)
+python tools\snapshot_window.py sessions\<folder> <seconds> out.png auto [rule]
 
 # After a session
 python tools\replay_session.py sessions\<date>_<name>              # replay_*.csv + overview .png
@@ -54,7 +62,8 @@ python -c "import socket;s=socket.socket(2,2);s.bind(('127.0.0.1',5005));[print(
 
 Useful `run_session.py` options: `--plot` (live window, with a Pause button), `--resume FOLDER` (continue a stopped session), `--order` / `--protocol` (steps from
 `config/protocol.yaml` with `--pump protocol`, else `config/therapy.yaml`; a protocol without `self_report`
-is not a data collection: no self-report / marker buttons, no ML hints), `--manual-steps`, `--esp32 COM16` (airbag pump), `--pump protocol|auto|off`, `--site`, `--ppg none`, `--sinks udp|serial|none`,
+is not a data collection: no self-report / marker buttons, no ML hints; `--order next`: the order
+after the last finished session with that protocol file), `--manual-steps`, `--esp32 COM16` (airbag pump), `--pump protocol|auto|off`, `--site`, `--ppg none`, `--sinks udp|serial|none`,
 `--send-features`, `--seconds N`, `--warmup-s`, `--baseline-s`, `--profile file.json`,
 `--confidence hard`, `--no-smoothing`, `--baseline-mode fixed|always|gated`.
 `replay_session.py` takes the same processing options (e.g. `--confidence hard`, `--print`).
@@ -68,6 +77,9 @@ is not a data collection: no self-report / marker buttons, no ML hints), `--manu
 | `tools/make_labels.py` | Offline: markers → per-second condition, phase_idx, after, sr, is_baseline |
 | `tools/build_dataset.py`, `tools/train_person.py` | Training samples, per-person model (`docs/analysis_plan.md`) |
 | `tools/analyze_airbag.py` | Airbag test: EDA / HR / motion per block, airbag minus rest, per body part |
+| `tools/analyze_control.py` | Control test: airbag block vs control block, aligned on the (would-be) trigger |
+| `tools/snapshot_window.py` | Screenshot of the live window at a chosen moment of a recording |
+| `demo.bat`, `control_test.bat` | One click: ask for a name, then run the demo / the control test |
 | `biofeedback/pump.py` | Closed-loop pump rule (`--pump auto`) |
 | `tools/pump_console.py` | Pump by hand: commands, live pressure plot (comfort test, PI tuning) |
 | `tools/ppg_check.py`, `tools/acc_check.py` | Hardware checks: RT7015 over BLE, BITalino ACC (calibration) |
@@ -76,6 +88,8 @@ is not a data collection: no self-report / marker buttons, no ML hints), `--manu
 | `config/protocol.yaml` | **Test protocol**: steps, durations, orders, condition codes, self-report range |
 | `config/therapy.yaml` | Protocol for actual use: settling, opening small talk (baseline), therapy |
 | `config/airbag_test.yaml` | Airbag test: rest / airbag blocks (`pump: true` = pump on during the condition) |
+| `config/demo.yaml` | Short demo: 1 min settling, 2.5 min chat baseline, then the closed loop |
+| `config/control_test.yaml` | Control test: math / English marked by notes, airbag allowed in one task only |
 | `config/labels.example.yaml` | Optional extra free-text label columns (`make_labels.py --labels`) |
 | `docs/testing_process.md` | How to run a test session |
 | `firmware/pump/` | Airbag pump firmware, classic ESP32 DevKit (Arduino IDE or PlatformIO) |
@@ -244,7 +258,7 @@ Airbag pump (`--esp32`, independent of `--sinks`), `--pump`:
 
 - `protocol` (default): on during conditions with `pump: true` in the protocol file (airbag test),
   until `sr:N`, the next code, `pause` or `end`.
-- `auto`: closed loop. On after 30 valid seconds in a row of rise / spike (once the baseline is
+- `auto`: closed loop. On after 15 valid seconds of rise / spike (invalid ones neither count nor reset) (once the baseline is
   ready); on at least 60 s; off after 30 valid seconds of steady / state_recovery, or after 300 s
   anyway; no new start for 60 s after a stop. Numbers: `PUMP_*` in `settings.py`.
 - Protocol and controller use the breathing assist (4 s inflate / 6 s deflate, `PUMP_*_PWM` and
@@ -253,9 +267,15 @@ Airbag pump (`--esp32`, independent of `--sinks`), `--pump`:
   `pump:inflate` (Inflate: fill and hold `PUMP_HOLD_KPA`), `pump:breathe` (Breathe: breathing
   assist, the manual trigger), `pump:off` (Deflate) force the pump and the protocol / controller is
   ignored; `pump:auto` (Auto) hands it back (the pump goes to what they want at that moment).
-  Switching between inflate and breathe does not deflate in between.
-- Every change goes to `pump.csv` (t_ms, on, mode off / hold / breathe, reason); what the board did is in `esp32_log.csv`
-  (`F,<ms>,<phase>` lines).
+  Switching between inflate and breathe does not deflate in between. Started with `--pump off`,
+  Auto starts the closed loop.
+- Control test (`config/control_test.yaml`): the closed loop may start the pump only in the airbag
+  task's block (`note:<task>` starts a block); elsewhere it only logs `would_on` / `would_off`.
+- Live window: the pump box shows who controls the pump, the rule's progress and a banner with a
+  beep at each change (green = automatic, purple = breathing by hand, blue = inflated by hand,
+  orange = off); a strip at the bottom of the plots marks when the pump was on, in the same colours.
+- Every change goes to `pump.csv` (t_ms, on, mode off / hold / breathe / would_on / would_off,
+  reason); what the board did is in `esp32_log.csv` (`F,<ms>,<phase>` lines).
 
 ## Session files
 
@@ -269,7 +289,7 @@ Airbag pump (`--esp32`, independent of `--sinks`), `--pump`:
 | `ppg.csv` | t_ms, aout_mv, sout_mv (every sample; t_ms from sample count / rate, anchored on packet receive times) |
 | `beats.csv` | t_ms (the beat), confirm_ms (when detected), ibi_ms, bpm, amplitude_mv (before the validity check; ibi 0 = no previous beat) |
 | `esp32_log.csv` | t_ms, line (what the ESP32 prints, with `--esp32`: `F` phase changes, `P` pressure, `#` info / faults) |
-| `pump.csv` | t_ms, on, reason (pump commands) |
+| `pump.csv` | t_ms, on, mode, reason (pump commands; control test: also would_on / would_off) |
 | `markers.csv` | t_ms, local_time, text (condition codes, `sr:N`, `note:...`, `end`) |
 | `features.csv` | 1 row per second: phase, x1–x4, eda_rise, motion_rms, c_eda, c_motion, c, valid, z, p, arousal, state, mu |
 | `baseline.json` | initial and final mu |
@@ -285,7 +305,9 @@ motion confidence and/or heart rate (a warning is printed).
 | BITalino ACC (two-channel read, calibration 415 / 668) | real hardware |
 | RT7015 over BLE (connect, start command, 500 samples/s, 0 bad frames), beat detection, HR | real hardware (p01, 2026-10-29) |
 | Frame parser, sample clock, reconnect handling, replay = live | simulation and unit checks |
-| Live window (`--plot`), protocol file | simulation only |
-| Pump firmware with pressure PI and Bluetooth serial (`firmware/pump`) | compiles; not flashed or run on the pump yet |
-| Pump link, `--pump protocol / auto`, `pump_console.py`, `analyze_airbag.py` | simulation only (simulated board, no PI) |
+| Live window (`--plot`), protocol file, demo | real hardware (demo runs 2026-11-04/05) |
+| Pump firmware (`firmware/pump`): open-loop breathing, constant-pressure PI, Bluetooth serial | real hardware: flashed, breathing 1.1-2.1 kPa / down to -1 kPa with the bag strapped on (junqian, 2026-11-05) |
+| Closed loop `--pump auto` (automatic starts and stops) | real hardware (jingyi, junqian, 2026-11-05) |
+| Control test (`control_test.yaml`, `--order next`, `analyze_control.py`) | short simulations and one re-labelled real session; not run on hardware yet |
+| `--pump protocol`, `analyze_airbag.py` | simulation only |
 | Training scripts (`build_dataset.py`, `train_person.py`) | one real session (Seona) |

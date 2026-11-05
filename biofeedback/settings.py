@@ -124,8 +124,9 @@ UDP_TARGET = "127.0.0.1:5005"
 
 # Closed-loop airbag pump (run_session.py --pump auto, biofeedback/pump.py; firmware/pump). Counted
 # in 1 s steps of the state, only after the baseline is ready (phase "run").
-PUMP_START_STATES = (1, 2)   # rise, spike: valid seconds in a row in one of these ...
-PUMP_START_S = 30            # ... this many -> pump on (5 fired on single SCRs; see SPIKE_RISE_US)
+PUMP_START_STATES = (1, 2)   # rise, spike: valid seconds in one of these (invalid ones neither count
+PUMP_START_S = 15            # nor reset) -> pump on after this many. 30 felt too strict (2026-11-05);
+                             # on Seona / demo_5, 15 gave the same starts, 15 s earlier. 5 fired on single SCRs
 PUMP_MIN_ON_S = 60           # on at least this long; then off after ...
 PUMP_STOP_STATES = (0, 3)    # ... PUMP_STOP_S valid seconds of steady / state_recovery
 PUMP_STOP_S = 30             # (invalid seconds, e.g. pump vibration, neither count nor reset)

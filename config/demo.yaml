@@ -8,7 +8,7 @@ auto_steps: true               # chat and demo start by themselves when the time
 
 conditions:
   "1": {name: chat, color: "#90CAF9"}
-  "5": {name: demo, color: "#CE93D8"}
+  "5": {name: demo, color: "#FFCDD2"}  # light red: not purple / green / orange (pump banners)
 
 orders:
   demo:

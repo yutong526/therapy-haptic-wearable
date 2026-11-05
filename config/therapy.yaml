@@ -1,8 +1,8 @@
 # Protocol for actual use in a therapy session (run_session.py --protocol config/therapy.yaml).
 # The baseline comes from the opening small talk, computed the same way as in data collection
-# (code 1 = chat, BASELINE_SOURCE in settings.py): press "1 chat" when the small talk starts and
-# "5 therapy" when the therapy proper starts. If chat is never pressed, a time-based baseline is
-# used (WARMUP_S + BASELINE_S). Also the default for run_session.py --pump auto / off (demo, tests).
+# (code 1 = chat, BASELINE_SOURCE in settings.py). The steps start by themselves (auto_steps):
+# chat after the settling time, therapy after the chat. Also the default for run_session.py
+# --pump auto / off (demo, tests).
 # Not a data collection: no self-report.
 
 settling_minutes: 3            # electrodes settle while getting ready
@@ -10,7 +10,7 @@ auto_steps: true               # chat and therapy start by themselves when the t
 
 conditions:
   "1": {name: chat,    color: "#90CAF9"}
-  "5": {name: therapy, color: "#CE93D8"}
+  "5": {name: therapy, color: "#FFCDD2"}  # light red: not purple / green / orange (pump banners)
 
 orders:
   therapy:

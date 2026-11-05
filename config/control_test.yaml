@@ -1,0 +1,29 @@
+# Control test: does the airbag help? Same window as the demo (control_test.bat asks only for the
+# name). After the baseline, mark the tasks with notes: note:math / note:english at a task's start,
+# note:end at its end; the rest after a task belongs to it until the next task note. The closed
+# loop may start the airbag only in the airbag task of this session; in the other task (control)
+# and before the first task note it only logs what it would do ("would_on" / "would_off" in
+# pump.csv). The airbag task alternates over the finished control tests (--order next): math,
+# English, math, ... Task order is free (alternate it between participants).
+#   python tools\analyze_control.py sessions\<folder> [more sessions ...]
+
+settling_minutes: 3            # electrodes settle (1 min was too short: junqian's baseline EDA was too low)
+auto_steps: true
+
+control:
+  tasks: [math, english]       # note:<task> starts a block
+  airbag_task:                 # order -> the task whose block may start the airbag
+    airbag_math: math
+    airbag_english: english
+
+conditions:
+  "1": {name: chat, color: "#90CAF9"}
+  "5": {name: test, color: "#FFCDD2"}
+
+orders:
+  airbag_math:
+    - {code: "1", minutes: 2.5, note: "baseline: talk calmly, sensor hand still"}
+    - {code: "5", minutes: 60, note: "airbag in MATH only. Notes: note:math / note:english at the start, note:end at the end"}
+  airbag_english:
+    - {code: "1", minutes: 2.5, note: "baseline: talk calmly, sensor hand still"}
+    - {code: "5", minutes: 60, note: "airbag in ENGLISH only. Notes: note:math / note:english at the start, note:end at the end"}

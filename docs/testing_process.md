@@ -154,6 +154,30 @@ python tools\analyze_airbag.py sessions\<date>_<name>_wrist sessions\<date>_<nam
   and each airbag block minus the rest before it. A few blocks per site: a description, not a
   tested effect.
 
+## Control test (does the airbag help?)
+
+Double-click `control_test.bat` and type the participant's name: the same window as the demo
+(settling 3 min, chat 2.5 min as the baseline, then an open test phase). Mark the tasks with notes
+(note box or terminal): `note:math` / `note:english` at a task's start, `note:end` at its end; the
+rest after a task belongs to it until the next task note. The closed loop may start the airbag only
+in this session's airbag task (shown in the window: "airbag in MATH only" or "ENGLISH only"); in the
+other task and before the first task note the same rule only logs when it would have started the pump
+(`would_on` / `would_off` in `pump.csv`, "would start (control)" in the window). The airbag task
+alternates over the finished control tests (math, English, math, ...); alternate the task order
+between participants. Give the questionnaire after each block.
+
+```powershell
+python tools\analyze_control.py sessions\<date>_<name> [more sessions ...]
+```
+
+- Do not press the pump buttons: by hand the pump ignores the rule and the block is no longer clean.
+- Give each task and the rest after it about the same time in both blocks (e.g. 5 + 3 min).
+- `analyze_control.py` aligns both blocks on their trigger (pump started / would have started):
+  latency from the task start, arousal / HR / EDA in the 30 s before and 0-60 s, 60-120 s after,
+  seconds until arousal < 0.5, task and rest means; `control_overview.png` overlays both blocks.
+  With several sessions: `results/control_summary.csv` and the mean airbag − control differences.
+- If the rule never fires in a block, that block has no trigger and is only described by its means.
+
 ## Notes
 
 - Baseline: offline, `replay_session.py --baseline-source chat` (default) or `rest` uses that phase

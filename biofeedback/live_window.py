@@ -4,7 +4,7 @@ Left: what is being recorded (EDA, motion, PPG waveform with the detected beats,
 arousal / confidence), with the background coloured by the current condition marker.
 Right: clock, airbag pump box (inflate / breathe / deflate / auto buttons, board pressure, what the closed-loop
 rule waits for), current protocol step with countdown, buttons for the markers and self-reports
-and a note box (only for a data collection, i.e. a protocol with self-report), sensor lights,
+(only for a data collection, i.e. a protocol with self-report), a note box, sensor lights,
 confidence and baseline progress, and an End button. A pump change shows a banner for
 PUMP_ALERT_S and beeps.
 
@@ -28,7 +28,18 @@ LIGHT = {"ok": "#43A047", "slow": "#FDD835", "off": "#E53935", "wait": "#9E9E9E"
 MARKER_COLOR = "tab:purple"
 PUMP_ALERT_S = 10  # banner after the pump state changes
 PUMP_TEXT = {"off": "Pump off", "hold": "Inflated (constant pressure)", "breathe": "Breathing assist"}
-PUMP_COLOR = {"off": "#EF6C00", "hold": "#1565C0", "breathe": "#6A1B9A"}
+PUMP_COLOR = {"off": "#EF6C00", "hold": "#1565C0", "breathe": "#6A1B9A"}  # set by hand
+AUTO_COLOR = "#2E7D32"  # switched on by the closed loop / protocol
+
+
+def pump_color(pump):
+    return state_color(pump["state"], pump["reason"])
+
+
+def state_color(state, reason):
+    if state != "off" and not reason.startswith("manual"):
+        return AUTO_COLOR
+    return PUMP_COLOR[state]
 
 
 def fmt_s(s):
@@ -110,10 +121,11 @@ class LiveWindow:
     def __init__(self, clock, title, protocol, order, settling_s, streams, on_marker, pump_mode=None):
         """protocol: from protocol.load_protocol; streams: {name: expected samples/s} to show a light
         for; on_marker(text) records a marker; pump_mode: run_session --pump with a pump link, else None.
-        A protocol without self-report (demo, tests): no step / marker / self-report buttons and no note box."""
+        A protocol without self-report (demo, tests): no step / marker / self-report buttons."""
         self.clock, self.title, self.streams, self.on_marker = clock, title, streams, on_marker
         self.pump_mode = pump_mode
         self.pump = {"state": "off", "reason": "", "rule": "", "board": "no board line yet", "changed": None}
+        self.pump_log = []     # (t_s, state, reason): strip under the slow plots
         self.conditions, self.self_report = protocol["conditions"], protocol["self_report"]
         self.colors = dict(SPECIAL_COLORS, **{k: c["color"] for k, c in self.conditions.items()})
         self.lock = threading.Lock()
@@ -145,12 +157,13 @@ class LiveWindow:
             elif stream == "esp32_log" and values[0].startswith("# "):
                 self.pump["board"] = values[0][2:60]  # faults and info
 
-    def set_pump(self, state, reason, rule=None):
-        """Pump state ("off" / "hold" / "breathe") and reason or, with state None, only the closed-loop
-        rule line."""
+    def set_pump(self, state, reason, rule=None, t=None):
+        """Pump state ("off" / "hold" / "breathe") and reason, from t (ms; default now), or, with state
+        None, only the closed-loop rule line."""
         with self.lock:
             if state is not None:
                 self.pump["state"], self.pump["reason"], self.pump["changed"] = state, reason, time.monotonic()
+                self.pump_log.append(((self.clock.ms() if t is None else t) / 1000, state, reason))
             if rule is not None:
                 self.pump["rule"] = rule
 
@@ -254,7 +267,7 @@ class LiveWindow:
             pump_btns = tk.Frame(box)
             pump_btns.pack(fill=tk.X)
             for text, cmd, color in (("Inflate", "pump:inflate", "#90CAF9"), ("Breathe", "pump:breathe", "#B39DDB"),
-                                     ("Deflate", "pump:off", "#FFCC80"), ("Auto", "pump:auto", "#EEEEEE")):
+                                     ("Deflate", "pump:off", "#FFCC80"), ("Auto", "pump:auto", "#A5D6A7")):
                 tk.Button(pump_btns, text=text, font=mid, bg=color,
                           command=lambda c=cmd: self._send(c)).pack(side=tk.LEFT, expand=True, fill=tk.X)
             alert_lbl = tk.Label(box, font=("Segoe UI", 13, "bold"), fg="white", wraplength=wrap)
@@ -277,7 +290,7 @@ class LiveWindow:
         for w in (step_lbl, cond_lbl, timer_lbl, hint_lbl):
             w.pack()
 
-        # data collection only: step, condition and self-report buttons, note box
+        # data collection only: step, condition and self-report buttons
         proto = tk.Frame(body)
         if self.self_report:
             proto.pack(fill=tk.X)
@@ -309,8 +322,9 @@ class LiveWindow:
         sr_lbl = tk.Label(proto, font=small, anchor="w", fg="#555555")
         sr_lbl.pack(fill=tk.X)
 
-        tk.Label(proto, text="Note (Enter to save)", font=small, anchor="w").pack(fill=tk.X, pady=(8, 0))
-        note = tk.Entry(proto, font=small)
+        # notes (all modes): saved as note:<text> markers
+        tk.Label(body, text="Note (Enter to save)", font=small, anchor="w").pack(fill=tk.X, pady=(8, 0))
+        note = tk.Entry(body, font=small)
         note.pack(fill=tk.X)
 
         def save_note(_event=None):
@@ -319,7 +333,7 @@ class LiveWindow:
                 self._send(f"note:{text}")
                 note.delete(0, tk.END)
         note.bind("<Return>", save_note)
-        last_lbl = tk.Label(proto, font=small, anchor="w", fg="#555555")
+        last_lbl = tk.Label(body, font=small, anchor="w", fg="#555555")
         last_lbl.pack(fill=tk.X)
 
         tk.Label(body, text="Sensors (samples/s)", font=small, anchor="w").pack(fill=tk.X, pady=(6, 0))
@@ -411,15 +425,16 @@ class LiveWindow:
                            if age is not None else f"{stream} -")
             if self.pump_mode:
                 pump_lbl.config(text=PUMP_TEXT[pump["state"]] + (f" ({pump['reason']})" if pump["reason"] else ""),
-                                fg=PUMP_COLOR[pump["state"]] if pump["state"] != "off" else "#555555")
+                                fg=pump_color(pump) if pump["state"] != "off" else "#555555")
                 z = (" | z " + " ".join(f"{k} {row['z_' + k]:+.1f}" for k in S.FEATURES)) if row is not None else ""
                 pump_info.config(text=f"{pump['board']}\n{pump['rule'] or 'control: -'}{z}")
                 changed = pump["changed"]
                 if changed is not None and mono - changed < PUMP_ALERT_S:
                     manual = pump["reason"].startswith("manual")
-                    what = PUMP_TEXT[pump["state"]].upper() + (" (by hand)" if manual else "")
+                    what = (("" if manual or pump["state"] == "off" else "AUTO: ") + PUMP_TEXT[pump["state"]].upper()
+                            + (" (by hand)" if manual else ""))
                     flash = int((mono - changed) * 2) % 2 == 0
-                    color = PUMP_COLOR[pump["state"]] if flash else "#555555"
+                    color = pump_color(pump) if flash else "#555555"
                     alert_lbl.config(text=f"{what}\n{pump['reason']}", bg=color)
                     if not alert_lbl.winfo_ismapped():
                         alert_lbl.pack(fill=tk.X, before=pump_lbl, pady=(4, 2))
@@ -457,7 +472,8 @@ class LiveWindow:
             ax.sharex(ax_eda)
         for ax in axes:
             ax.grid(alpha=0.3)
-        ax_eda.set_title("EDA (uS)", fontsize=9, loc="left")
+        ax_eda.set_title("EDA (uS)   |   strip at the bottom of the plots: pump on (green = automatic, "
+                         "purple = breathing by hand, blue = inflated by hand)", fontsize=9, loc="left")
         ax_mot.set_title("Motion: BITalino ACC (g)", fontsize=9, loc="left")
         ax_ppg.set_title(f"PPG AOUT (mV), last {S.PLOT_PPG_WINDOW_S} s; dots = detected beats", fontsize=9, loc="left")
         ax_hr.set_title("Heart rate (bpm): line = HR used (median of valid beats), dots = each beat",
@@ -485,7 +501,7 @@ class LiveWindow:
         def draw(now):
             with self.lock:
                 snap = {k: list(v) for k, v in self.series.items()}
-                markers, row = list(self.markers), self.row
+                markers, row, pump_log = list(self.markers), self.row, list(self.pump_log)
             lo_x = max(0, now - S.PLOT_WINDOW_S)
 
             ln["eda"].set_data(*xy(snap.get("eda", [])))
@@ -523,6 +539,13 @@ class LiveWindow:
                 if b >= lo_x and c in self.colors:
                     for ax in slow:
                         bands.append(ax.axvspan(a, b, color=self.colors[c], alpha=0.35, lw=0, zorder=0))
+            # pump on: strip at the bottom of the slow plots (green automatic, else the by-hand colour)
+            for i, (a, state, reason) in enumerate(pump_log):
+                b = pump_log[i + 1][0] if i + 1 < len(pump_log) else now
+                if state != "off" and b >= lo_x:
+                    for ax in slow:
+                        bands.append(ax.axvspan(a, b, ymin=0, ymax=0.08, color=state_color(state, reason),
+                                                lw=0, zorder=3))
             # pauses (until "resume" or the next code / sr / end): hatched
             since = None
             for t, text in markers + [(now, "resume")]:

@@ -98,6 +98,23 @@ def safe_name(name):
     return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name.strip()) or "unnamed"
 
 
+def next_order(protocol, protocol_file, out):
+    """Orders in turn over the finished sessions (an "end" marker) recorded with this protocol file."""
+    done = 0
+    for meta_path in out.glob("*/session.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            same = Path(meta.get("protocol_file") or "").resolve() == Path(protocol_file).resolve()
+            ended = any(r["text"].strip() == "end" for r in replay.read_csv(meta_path.parent / "markers.csv"))
+        except (OSError, ValueError, KeyError):
+            continue
+        done += same and ended
+    names = list(protocol["orders"])
+    order = names[done % len(names)]
+    print(f"Order {order}: {done} finished session(s) with {protocol_file} so far")
+    return order
+
+
 def marker_loop(add_marker):
     for line in sys.stdin:
         text = line.strip()
@@ -139,8 +156,9 @@ def main():
                                        "else config/therapy.yaml)")
     ap.add_argument("--manual-steps", action="store_true",
                     help="enter the step codes by hand even if the protocol file has auto_steps: true")
-    ap.add_argument("--order", help="order name from the protocol file (default: odd subject number -> "
-                                    "first order, even -> second)")
+    ap.add_argument("--order", help="order name from the protocol file (default: by subject number, see "
+                                    "default_order); next: the order after the last finished session with "
+                                    "this protocol file")
     args = ap.parse_args()
     meta = None
     if args.resume:
@@ -168,6 +186,8 @@ def main():
     if data_collection and not args.order and not any(ch.isdigit() for ch in args.subject):
         print(f"Note: subject {args.subject!r} has no number, so the order is not counterbalanced "
               "automatically; give --subject pNN or --order")
+    if args.order == "next":
+        args.order = next_order(protocol, args.protocol, Path(args.out))
     args.order = args.order or default_order(protocol, args.subject)
     if args.order not in protocol["orders"]:
         ap.error(f"--order must be one of {', '.join(protocol['orders'])}")
@@ -234,8 +254,22 @@ def main():
     # controller decide (they use "breathe"), else the state forced by pump:inflate / breathe / off
     pump = {"state": "off", "code_t": None, "manual": None, "wanted": "off"}
     drive = {"mode": args.pump}  # who decides when not by hand; pump:auto turns "off" into "auto"
-    # auto_steps: follows the markers like the window does, the loop enters the next code when time is up
-    steps = Progress(protocol, args.order, args.warmup_s) if protocol["auto_steps"] and not args.manual_steps else None
+    # current step, from the markers as in the window; auto_steps: the loop enters the next code when time is up
+    tracker = Progress(protocol, args.order, args.warmup_s)
+    steps = tracker if protocol["auto_steps"] and not args.manual_steps else None
+    # control test: the closed loop may start the pump only in the airbag block (protocol "control":
+    # note:<task> starts a block) or, else, only in steps with airbag: true (if any step has it)
+    control = protocol.get("control")
+    airbag_task = control["airbag_task"][args.order] if control else None
+    block = {"task": None}
+    airbag_steps = [st.get("airbag", False) for st in protocol["orders"][args.order]]
+    gated = any(airbag_steps)
+
+    def airbag_allowed():
+        if control:
+            return block["task"] == airbag_task
+        i = tracker.index
+        return not gated or (0 <= i < len(airbag_steps) and tracker.code == tracker.steps[i][0] and airbag_steps[i])
 
     mode_lines = {"hold": f"c{S.PUMP_HOLD_KPA:.2f}\n".encode(), "breathe": b"b\n"}  # firmware line commands
 
@@ -248,7 +282,7 @@ def main():
         if esp32:
             esp32.set_pump(state != "off", mode_lines.get(state, b""))
         if plot:
-            plot.set_pump(state, reason)
+            plot.set_pump(state, reason, t=t)
             if drive["mode"] == "auto" and pump["manual"] is None:
                 plot.add_marker(t, "pump:" + ("on" if state != "off" else "off"))
         print(f"*** [pump {t / 1000:.1f} s] {PUMP_LABELS[state]} ({reason}) ***")
@@ -271,7 +305,7 @@ def main():
             pump["manual"] = None
             if drive["mode"] == "off":  # started with --pump off: the closed loop takes over
                 drive["mode"] = "auto"
-                pump["wanted"] = "breathe" if controller.on else "off"
+                pump["wanted"] = "breathe" if controller.on and airbag_allowed() else "off"
             reason = "auto: closed loop decides" if drive["mode"] == "auto" else "auto: protocol decides"
             if pump["wanted"] == pump["state"]:  # nothing to switch: still say so
                 print(f"*** [pump {t / 1000:.1f} s] {reason}, {PUMP_LABELS[pump['state']]} ***")
@@ -305,8 +339,13 @@ def main():
             if plot:
                 plot.add_marker(t, text)
             print(f"[marker {t / 1000:.1f} s] {text}")
-            if steps:
-                steps.marker(t / 1000, text)
+            tracker.marker(t / 1000, text)
+            if control and text.lower().startswith("note:"):
+                task = text[5:].strip().lower()
+                if task in control["tasks"]:
+                    block["task"] = task
+                    print(f"[block {t / 1000:.0f} s] {task}: "
+                          + ("airbag allowed" if task == airbag_task else "control, the pump is only logged"))
             if text.lower().startswith("pump:"):
                 manual_pump(text, t)
             elif args.pump == "protocol":
@@ -357,9 +396,8 @@ def main():
         if plot:
             for m in old_markers:  # protocol progress and marker lines in the window
                 plot.add_marker(float(m["t_ms"]), m["text"])
-        if steps:
-            for m in old_markers:
-                steps.marker(float(m["t_ms"]) / 1000, m["text"].strip())
+        for m in old_markers:
+            tracker.marker(float(m["t_ms"]) / 1000, m["text"].strip())
         # the stopped time counts as a pause; a step ended only by "end" (no self-report) is continued
         code, open_step = None, False
         for m in old_markers:
@@ -393,7 +431,7 @@ def main():
           f"condition codes: the {args.baseline_s} s after the {args.warmup_s} s warm-up." if data_collection else "."))
     print_protocol(protocol, args.order, args.warmup_s)
     print(f"Recording to {folder}\n" + ("Type a marker + Enter at any time (in this terminal). "
-                                       if data_collection else "")
+                                       if data_collection else "Notes: type note:<text> + Enter. ")
           + "Ctrl+C" + (" or End in the window" if plot else "") + " to stop.")
     if esp32:
         print("Pump by hand: pump:inflate, pump:breathe, pump:off, pump:auto (back to --pump " + args.pump + ")")
@@ -417,14 +455,25 @@ def main():
             for p in publishers:
                 p.publish(message)
             change = controller.update(row)
+            allowed = airbag_allowed()
             if change and drive["mode"] == "auto":
-                set_pump(*change, t=now)
+                if allowed:
+                    set_pump(*change, t=now)
+                else:  # control step: only logged
+                    recorder.write("pump", now, [0, "would_on" if change[0] else "would_off", change[1]])
+                    print(f"[rule {now / 1000:.0f} s] would {'start' if change[0] else 'stop'} the pump "
+                          f"({change[1]}); airbag not allowed now")
+                    if plot:
+                        plot.add_marker(now, "would " + ("start" if change[0] else "stop") + " (control)")
+            if drive["mode"] == "auto" and not allowed and pump["wanted"] != "off":
+                set_pump(False, "step without airbag (control)", t=now)
             if plot:
                 control = ("by hand (Auto: back to automatic)" if pump["manual"] else
                            {"auto": "automatic (closed loop)", "protocol": "protocol steps",
                             "off": "buttons only (Auto: start the closed loop)"}[drive["mode"]])
                 plot.set_pump(None, None, f"control: {control}\nauto rule: {controller.status(row)}"
-                              + ("" if drive["mode"] == "auto" else " (not driving)"))
+                              + ("" if drive["mode"] == "auto" and allowed else
+                                 " (airbag not allowed now: only logged)" if drive["mode"] == "auto" else " (not driving)"))
             recorder.flush()
             for n in notices:
                 print(f"[{now / 1000:.0f} s] {n}")
