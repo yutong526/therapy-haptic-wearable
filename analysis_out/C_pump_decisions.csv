@@ -1,0 +1,11 @@
+session,type,order,start,start_s,phase,start_reason,on_s,stop_s,stop_phase,stop_reason,max_kPa,inflated
+A,demo,demo,1,348,task (math),rise for 30 s,94,442,task (math),steady / state_recovery for 30 s,0.09,no
+A,demo,demo,2,519,task (math),rise for 30 s,142,661,rest after math,steady / state_recovery for 30 s,1.85,yes
+A,demo,demo,3,793,task (game),rise for 30 s,81,874,task (game),steady / state_recovery for 30 s,1.65,yes
+B,demo,demo,1,302,task (math),spike for 15 s,105,407,task (math),steady / state_recovery for 30 s,2.13,yes
+B,demo,demo,2,467,task (math),rise for 53 s,60,527,task (math),steady / state_recovery for 32 s,2.06,yes
+B,demo,demo,3,587,task (math),spike for 47 s,88,675,rest after math,steady / state_recovery for 30 s,2.11,yes
+B,demo,demo,4,735,rest after math,rise for 38 s,219,954,task (english),steady / state_recovery for 30 s,2.06,yes
+B,demo,demo,5,1033,task (english),rise for 15 s,146,1179,rest after english,steady / state_recovery for 30 s,1.18,yes
+C_3,control test,airbag_math,1,387,task (math),rise for 15 s,300,687,rest after math,maximum 300 s on,2.61,yes
+D,control test,airbag_english,1,785,task (english),rise for 15 s,279,1064,rest after english,end of session,1.76,yes

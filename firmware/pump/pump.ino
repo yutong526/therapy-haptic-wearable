@@ -1,4 +1,4 @@
-// Airbag pump for the haptic armband on a classic ESP32 DevKit (from the team's pump.ino).
+// Airbag pump (worn at the waist) for the haptic wearable on a classic ESP32 DevKit (from the team's pump.ino).
 // Pump 1 inflates, pump 2 deflates (dual H-bridge: PWMA/AIN1/AIN2, PWMB/BIN1/BIN2, STBY); no valve.
 // Pressure: XGZP6847A (0-100 kPa gauge) on GPIO34.
 //

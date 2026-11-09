@@ -1,0 +1,9 @@
+step,condition,after,n_s,n_valid_s,eda_uS,hr_bpm,arousal,self_report,baseline_s
+1,rest,,230,0,6.27,74.8,,1,0
+2,chat,rest,277,277,7.52,76.7,0.55,1,213
+3,rest,chat,118,116,6.45,73.1,0.02,,0
+4,rest,rest,125,120,8.69,93.3,0.65,1,0
+5,math,rest,357,356,8.4,72.8,0.47,5,0
+6,recovery,math,188,187,8.11,72.3,0.5,2,0
+7,game,recovery,550,550,8.69,72.8,0.7,2,0
+8,recovery,game,194,194,8.1,69.5,0.21,1,0

@@ -100,7 +100,7 @@ VALID_C = 0.2               # valid = c >= VALID_C
 ALPHA = 0.3                  # a <- a + ALPHA * c * (p - a)
 Z_CLIP = 5.0
 MIN_DWELL_S = 5              # every state lasts at least this long
-# Rough tuning on one session (Seona 2026-10-30, default weights; EDA 5-10 uS with SCRs up to 1 uS):
+# Rough tuning on one session (E 2026-10-30, default weights; EDA 5-10 uS with SCRs up to 1 uS):
 # with 0.2 / 0.6 and PUMP_START_S 5 the closed-loop pump was on ~80 % of chat and rest; with
 # 0.5 / 0.8 / 30 chat 22 %, rest 24 %, math 66 %, game 78 %. Retune with more people.
 SPIKE_RISE_US = 0.5          # (placeholder) EDA rise over SHORT_WINDOW_S -> spike (was 0.2)
@@ -126,7 +126,7 @@ UDP_TARGET = "127.0.0.1:5005"
 # in 1 s steps of the state, only after the baseline is ready (phase "run").
 PUMP_START_STATES = (1, 2)   # rise, spike: valid seconds in one of these (invalid ones neither count
 PUMP_START_S = 15            # nor reset) -> pump on after this many. 30 felt too strict (2026-11-05);
-                             # on Seona / demo_5, 15 gave the same starts, 15 s earlier. 5 fired on single SCRs
+                             # on E / demo_5, 15 gave the same starts, 15 s earlier. 5 fired on single SCRs
 PUMP_MIN_ON_S = 60           # on at least this long; then off after ...
 PUMP_STOP_STATES = (0, 3)    # ... PUMP_STOP_S valid seconds of steady / state_recovery
 PUMP_STOP_S = 30             # (invalid seconds, e.g. pump vibration, neither count nor reset)

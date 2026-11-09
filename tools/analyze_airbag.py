@@ -9,7 +9,7 @@ block before it. Saves <session>/airbag_blocks.csv and airbag_overview.png; with
 also results/airbag_summary.csv (one row per airbag block, with the site).
 One run per body part, a few blocks each: the numbers describe these runs, not a tested effect.
 Example:
-    python tools/analyze_airbag.py sessions/20261103_Seona_wrist sessions/20261103_Seona_upper_arm
+    python tools/analyze_airbag.py sessions/20261103_E_wrist sessions/20261103_E_upper_arm
 """
 
 import argparse

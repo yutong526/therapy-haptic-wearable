@@ -1,0 +1,3 @@
+session,order,condition,task,task_start_s,trigger_s,latency_s,pump_on_s,valid_share,task_arousal,rest_arousal,arousal_before,arousal_0_60s,arousal_60_120s,arousal_change,task_hr,rest_hr,hr_before,hr_0_60s,hr_60_120s,hr_change,task_eda_level,rest_eda_level,eda_level_before,eda_level_0_60s,eda_level_60_120s,eda_level_change,recovery_s
+20261105_A,demo,airbag,math,298,348,50,236,0.99,0.43,0.2,0.98,0.26,0.17,-0.81,92.0,84.14,93.44,97.93,88.37,-5.07,7.43,6.26,9.58,7.75,6.82,-2.76,12
+20261105_A,demo,airbag,game,774,793,19,81,0.85,0.28,0.64,0.96,0.42,0.29,-0.67,82.19,87.88,84.8,84.8,87.33,2.53,5.17,4.91,6.7,6.12,4.99,-1.71,26

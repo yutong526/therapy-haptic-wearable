@@ -1,0 +1,5 @@
+session,order,would_on_s,phase,reason
+C_3,airbag_math,747,task (english),rise for 29 s
+C_3,airbag_math,998,task (english),spike for 15 s
+C_3,airbag_math,1279,rest after english,spike for 28 s
+D,airbag_english,547,task (math),rise for 15 s

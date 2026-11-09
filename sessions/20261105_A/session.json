@@ -1,0 +1,217 @@
+{
+  "name": "A",
+  "subject": "A",
+  "eda_port": "COM15",
+  "eda_channel": 1,
+  "acc_channel": 5,
+  "motion_source": "bitalino",
+  "ppg_source": "ble",
+  "ppg_address": "70:15:11:69:00:1D",
+  "esp32_port": "COM18",
+  "pump_mode": "auto",
+  "site": null,
+  "simulate": false,
+  "profile": "C:\\therapy-haptic-wearable\\profiles\\A.json",
+  "profile_found": false,
+  "profile_values": {
+    "weights": {
+      "eda_level": 0.5,
+      "eda_slope": 1.0,
+      "scr_rate": 1.0,
+      "hr": 0.5
+    },
+    "bias": -1.0,
+    "sigma": {
+      "eda_level": 0.3,
+      "eda_slope": 0.5,
+      "scr_rate": 2.0,
+      "hr": 5.0
+    },
+    "lag_s": 0,
+    "mu_reference": {
+      "eda_level": null,
+      "eda_slope": null,
+      "scr_rate": null,
+      "hr": null
+    }
+  },
+  "warmup_s": 60,
+  "baseline_s": 120,
+  "confidence": "soft",
+  "smoothing": true,
+  "baseline_mode": "gated",
+  "baseline_source": "chat",
+  "order": "demo",
+  "protocol_file": "config\\demo.yaml",
+  "protocol": {
+    "settling_s": 60,
+    "auto_steps": true,
+    "conditions": {
+      "1": {
+        "name": "chat",
+        "color": "#90CAF9",
+        "pump": false
+      },
+      "5": {
+        "name": "demo",
+        "color": "#FFCDD2",
+        "pump": false
+      }
+    },
+    "self_report": null,
+    "orders": {
+      "demo": [
+        {
+          "code": "1",
+          "seconds": 150,
+          "note": "baseline: talk calmly, sensor hand still"
+        },
+        {
+          "code": "5",
+          "seconds": 3600,
+          "note": "closed loop: the pump starts on stress"
+        }
+      ]
+    }
+  },
+  "settings": {
+    "FEATURES": [
+      "eda_level",
+      "eda_slope",
+      "scr_rate",
+      "hr"
+    ],
+    "CONFIDENCE_MODE": "soft",
+    "SMOOTHING": true,
+    "BASELINE_MODE": "gated",
+    "BASELINE_SOURCE": "chat",
+    "BASELINE_PROVISIONAL": "rest",
+    "BASELINE_SKIP_S": 60,
+    "BASELINE_PHASE_MIN_VALID_S": 60,
+    "C_BASELINE": 0.8,
+    "WARMUP_S": 180,
+    "BASELINE_S": 120,
+    "BASELINE_MIN_VALID_S": 90,
+    "EDA_RATE_HZ": 100,
+    "EDA_BIN_MS": 100,
+    "EDA_SMOOTH_S": 0.5,
+    "EDA_MIN_US": 0.05,
+    "EDA_MAX_US": 24.5,
+    "EDA_MAX_RATE_US_PER_S": 10,
+    "EDA_MIN_FILL": 0.5,
+    "EDA_LEVEL_WINDOW_S": 30,
+    "EDA_SLOPE_WINDOW_S": 60,
+    "SCR_WINDOW_S": 60,
+    "HR_WINDOW_S": 30,
+    "SHORT_WINDOW_S": 10,
+    "WINDOW_MIN_FRACTION": 0.5,
+    "SCR_MIN_AMP_US": 0.1,
+    "SCR_MAX_RISE_S": 5,
+    "PPG_BLE_NAME": "RT7015",
+    "PPG_BLE_ADDRESS": null,
+    "PPG_NOTIFY_UUID": "0000FFF4-0000-1000-8000-00805F9B34FB",
+    "PPG_WRITE_UUID": "0000FFF3-0000-1000-8000-00805F9B34FB",
+    "PPG_START_CMD": "aa 04 80 11 01 2f bb",
+    "PPG_STOP_CMD": "aa 04 80 11 00 2e bb",
+    "PPG_SCAN_S": 10,
+    "PPG_RETRY_S": 3,
+    "PPG_RATES": [
+      125,
+      250,
+      500,
+      1000,
+      2000
+    ],
+    "PPG_DEFAULT_RATE": 500,
+    "PPG_CLOCK_GAIN": 0.01,
+    "PPG_RESYNC_MS": 500,
+    "PPG_GAP_MS": 100,
+    "PPG_BEAT_METHOD": "aout",
+    "PPG_BASE_MS": 1000,
+    "PPG_SMOOTH_MS": 50,
+    "PPG_PEAK_WINDOW_MS": 2000,
+    "PPG_PEAK_FRAC": 0.5,
+    "PPG_REFRACTORY_MS": 330,
+    "PPG_SOUT_HIGH_MV": 1500,
+    "PPG_MIN_PULSE_MV": 100,
+    "IBI_MIN_MS": 300,
+    "IBI_MAX_MS": 1333,
+    "IBI_MAX_DEV": 0.3,
+    "IBI_HISTORY": 5,
+    "IBI_MIN_HISTORY": 3,
+    "HR_MAX_GAP_S": 5,
+    "MOTION_LO_G": 0.02,
+    "MOTION_HI_G": 0.1,
+    "MOTION_HARD_G": 0.05,
+    "LINK_TIMEOUT_S": 3,
+    "ACC_CHANNEL": 5,
+    "ACC_CMIN": 415,
+    "ACC_CMAX": 668,
+    "ARRIVAL_MARGIN_MS": 200,
+    "VALID_C": 0.2,
+    "ALPHA": 0.3,
+    "Z_CLIP": 5.0,
+    "MIN_DWELL_S": 5,
+    "SPIKE_RISE_US": 0.5,
+    "RISE_AROUSAL": 0.8,
+    "RISE_SLOPE_Z": 1.0,
+    "STEADY_AROUSAL": 0.4,
+    "BASELINE_BETA": 0.0016666666666666668,
+    "BASELINE_FROZEN_S": 600,
+    "BASELINE_SLOW_FACTOR": 0.1,
+    "DEFAULT_WEIGHTS": {
+      "eda_level": 0.5,
+      "eda_slope": 1.0,
+      "scr_rate": 1.0,
+      "hr": 0.5
+    },
+    "DEFAULT_BIAS": -1.0,
+    "DEFAULT_SIGMA": {
+      "eda_level": 0.3,
+      "eda_slope": 0.5,
+      "scr_rate": 2.0,
+      "hr": 5.0
+    },
+    "DEFAULT_LAG_S": 0,
+    "UDP_TARGET": "127.0.0.1:5005",
+    "PUMP_START_STATES": [
+      1,
+      2
+    ],
+    "PUMP_START_S": 30,
+    "PUMP_MIN_ON_S": 60,
+    "PUMP_STOP_STATES": [
+      0,
+      3
+    ],
+    "PUMP_STOP_S": 30,
+    "PUMP_MAX_ON_S": 300,
+    "PUMP_LOCKOUT_S": 60,
+    "PUMP_INHALE_PWM": 255,
+    "PUMP_EXHALE_PWM": 120,
+    "PUMP_INHALE_KPA": 3.0,
+    "PUMP_EXHALE_KPA": -1.0,
+    "PUMP_HOLD_KPA": 0.6,
+    "TRAIN_DROP_S": 60,
+    "SR_LATE_S": 60,
+    "CALIB_GAP_S": 30,
+    "CALIB_GAP_CHECK_S": 60,
+    "SAMPLE_EVERY_S": 10,
+    "MIN_SAMPLE_C": 0.5,
+    "TRAIN_L2": 1.0,
+    "FALLBACK_MIN_BACC": 0.7,
+    "FALLBACK_MIN_EDA_W": 0.05,
+    "E1_AMOUNTS_S": [
+      0,
+      30,
+      60,
+      null
+    ],
+    "PLOT_WINDOW_S": 120,
+    "PLOT_PPG_WINDOW_S": 10,
+    "PLOT_REFRESH_MS": 250,
+    "PLOT_STALE_S": 2
+  },
+  "start_utc": "2026-11-05T06:16:30.078535+00:00",
+  "note": "t_ms in every CSV = milliseconds since start_utc, laptop monotonic clock"
+}

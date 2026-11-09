@@ -7,7 +7,7 @@
 # English, math, ... Task order is free (alternate it between participants).
 #   python tools\analyze_control.py sessions\<folder> [more sessions ...]
 
-settling_minutes: 3            # electrodes settle (1 min was too short: junqian's baseline EDA was too low)
+settling_minutes: 3            # electrodes settle (1 min was too short: B's baseline EDA was too low)
 auto_steps: true
 
 control:

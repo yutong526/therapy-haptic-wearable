@@ -1,0 +1,11 @@
+t_ms,on,mode,reason
+302000,1,breathe,spike for 15 s
+407000,0,off,steady / state_recovery for 30 s
+467000,1,breathe,rise for 53 s
+527000,0,off,steady / state_recovery for 32 s
+587000,1,breathe,spike for 47 s
+675000,0,off,steady / state_recovery for 30 s
+735000,1,breathe,rise for 38 s
+954000,0,off,steady / state_recovery for 30 s
+1033000,1,breathe,rise for 15 s
+1179000,0,off,steady / state_recovery for 30 s

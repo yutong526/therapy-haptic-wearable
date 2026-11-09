@@ -1,0 +1,5 @@
+t_ms,on,mode,reason
+547000,0,would_on,rise for 15 s
+607000,0,would_off,steady / state_recovery for 30 s
+785000,1,breathe,rise for 15 s
+1063922.0,0,off,end of session

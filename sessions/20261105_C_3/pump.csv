@@ -1,0 +1,8 @@
+t_ms,on,mode,reason
+387000,1,breathe,rise for 15 s
+687000,0,off,maximum 300 s on
+747000,0,would_on,rise for 29 s
+913000,0,would_off,steady / state_recovery for 30 s
+998000,0,would_on,spike for 15 s
+1219000,0,would_off,steady / state_recovery for 30 s
+1279000,0,would_on,spike for 28 s

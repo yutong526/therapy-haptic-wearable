@@ -4,10 +4,17 @@
 .vscode/*
 !.vscode/settings.json
 __pycache__/
-# local recordings (participant data stays off GitHub)
+# local recordings; only these pseudonymised sessions are published (participants agreed)
 logs/
-sessions/
+sessions/*
+!sessions/20261105_A/
+!sessions/20261105_B/
+!sessions/20261105_C_3/
+!sessions/20261105_D/
+!sessions/20261030_E/
 .idea/
 # analysis outputs and trained profiles (derived from participant data)
 results/
 profiles/
+# real participant names <-> pseudonyms (local only, never commit)
+private/

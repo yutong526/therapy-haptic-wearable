@@ -1,4 +1,4 @@
-"""Laptop side of the armband: sensor sources, recording, features and arousal scoring.
+"""Laptop side of the haptic wearable (airbag at the waist): sensor sources, recording, features and arousal scoring.
 
 Data flow (every source only knows the shared Clock and a sink function):
     EdaSource (BITalino: EDA, ACC) ---+

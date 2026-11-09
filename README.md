@@ -1,4 +1,7 @@
-# Haptic biofeedback armband — input side (NUS CDE5312, Group 5)
+# Haptic biofeedback wearable: waist airbag with breathing guidance (NUS CDE5312, Group 5)
+
+Input: BITalino EDA and accelerometer, RT7015 PPG. Output: an airbag at the waist that inflates and deflates at
+6 breaths/min when stress rises. No vibration.
 
 Estimates the wearer's physiological arousal every second, relative to their own baseline, and
 sends `state, arousal, valid, t_ms` to the output side (airbag).
@@ -94,7 +97,7 @@ after the last finished session with that protocol file), `--manual-steps`, `--e
 | `docs/testing_process.md` | How to run a test session |
 | `firmware/pump/` | Airbag pump firmware, classic ESP32 DevKit (Arduino IDE or PlatformIO) |
 | `vendor/` | RT7015 manual and the manufacturer's Python example, reference only (not imported) |
-| `sessions/` | Recordings (not on GitHub) |
+| `sessions/` | Recordings; on GitHub only five pseudonymised sessions (A, B demo; C_3, D control test; E data collection) |
 
 ## Setup (once)
 
@@ -306,8 +309,8 @@ motion confidence and/or heart rate (a warning is printed).
 | RT7015 over BLE (connect, start command, 500 samples/s, 0 bad frames), beat detection, HR | real hardware (p01, 2026-10-29) |
 | Frame parser, sample clock, reconnect handling, replay = live | simulation and unit checks |
 | Live window (`--plot`), protocol file, demo | real hardware (demo runs 2026-11-04/05) |
-| Pump firmware (`firmware/pump`): open-loop breathing, constant-pressure PI, Bluetooth serial | real hardware: flashed, breathing 1.1-2.1 kPa / down to -1 kPa with the bag strapped on (junqian, 2026-11-05) |
-| Closed loop `--pump auto` (automatic starts and stops) | real hardware (jingyi, junqian, 2026-11-05) |
-| Control test (`control_test.yaml`, `--order next`, `analyze_control.py`) | short simulations and one re-labelled real session; not run on hardware yet |
+| Pump firmware (`firmware/pump`): open-loop breathing, constant-pressure PI, Bluetooth serial | real hardware: flashed, breathing 1.1-2.1 kPa / down to -1 kPa with the bag worn at the waist (B, 2026-11-05) |
+| Closed loop `--pump auto` (automatic starts and stops) | real hardware (A, B demo; C, D control test; 2026-11-05) |
+| Control test (`control_test.yaml`, `--order next`, `analyze_control.py`) | real hardware (C, D, 2026-11-05) |
 | `--pump protocol`, `analyze_airbag.py` | simulation only |
-| Training scripts (`build_dataset.py`, `train_person.py`) | one real session (Seona) |
+| Training scripts (`build_dataset.py`, `train_person.py`) | one real session (E) |

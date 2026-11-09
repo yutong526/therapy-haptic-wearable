@@ -76,10 +76,14 @@ def steps_with_times(meta, markers, end_s):
     return out
 
 
+DEMO_TASKS = ["math", "english", "game"]  # task notes in demo / therapy sessions (airbag allowed in all)
+
+
 def note_blocks(meta, markers, end_s):
-    """[(task, start_s, task_end_s, block_end_s, airbag)] from note:<task> ... note:end markers."""
-    control = meta["protocol"]["control"]
-    airbag_task = control["airbag_task"][meta["order"]]
+    """[(task, start_s, task_end_s, block_end_s, airbag)] from note:<task> ... note:end markers. Demo
+    sessions (no "control" in the protocol): every task block had the airbag allowed."""
+    control = meta["protocol"].get("control") or {"tasks": DEMO_TASKS, "airbag_task": None}
+    airbag_task = control["airbag_task"][meta["order"]] if control["airbag_task"] else None
     notes = [(num(m["t_ms"]) / 1000, m["text"].strip()[5:].strip().lower()) for m in markers
              if m["text"].strip().lower().startswith("note:")]
     starts = [(t, x) for t, x in notes if x in control["tasks"]]
@@ -87,7 +91,7 @@ def note_blocks(meta, markers, end_s):
     for k, (t, task) in enumerate(starts):
         block_end = starts[k + 1][0] if k + 1 < len(starts) else end_s
         task_end = next((u for u, x in notes if x == "end" and t < u <= block_end), block_end)
-        out.append((task, t, task_end, block_end, task == airbag_task))
+        out.append((task, t, task_end, block_end, airbag_task is None or task == airbag_task))
     return out
 
 
@@ -111,7 +115,8 @@ def analyze(folder):
     markers = read_csv(folder / "markers.csv")
     pump = read_csv(folder / "pump.csv") if (folder / "pump.csv").exists() else []
     end_s = num(features[-1]["t_ms"]) / 1000
-    specs = (note_blocks if meta["protocol"].get("control") else step_blocks)(meta, markers, end_s)
+    by_steps = any(st.get("airbag") for st in meta["protocol"]["orders"][meta["order"]])
+    specs = (step_blocks if by_steps else note_blocks)(meta, markers, end_s)
     blocks = []
     for name, a, b, block_end, airbag in specs:
         rest = block_end > b

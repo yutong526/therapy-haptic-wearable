@@ -6,9 +6,9 @@ esp32_log.csv, pump.csv, markers.csv, features.csv (1 row per second) and baseli
 Pump (--pump): "protocol" = on during conditions marked pump: true in the protocol file (airbag
 test), "auto" = closed loop from the state (settings PUMP_*), "off".
 Type a marker + Enter while recording (or use the --plot window). Ctrl+C to stop. Examples:
-    python tools/run_session.py --name Seona --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot
+    python tools/run_session.py --name E --subject p01 --eda COM15 --ppg-address 70:15:11:69:00:1D --plot
     python tools/run_session.py --subject p02 --eda COM15 --plot --order game_first
-    python tools/run_session.py --name Seona --site wrist --protocol config/airbag_test.yaml --esp32 COM11 \
+    python tools/run_session.py --name E --site wrist --protocol config/airbag_test.yaml --esp32 COM11 \
         --eda COM15 --baseline-source rest --sinks none --plot                 # airbag test, one body part
     python tools/run_session.py --subject p01 --eda COM15 --esp32 COM11 --pump auto --plot   # closed loop
     python tools/run_session.py --subject test --simulate --warmup-s 20 --baseline-s 40

@@ -1,0 +1,4 @@
+period,on_s,off_s,on_duration_s,max_kPa,min_kPa,n_INHALE,pwm_in_during_INHALE,deflate_s,inflated,n_P_lines
+1,348,442,94,0.09,-0.04,10,255,20.0,no,940
+2,519,661,142,1.85,-1.01,15,255,1.2,yes,1420
+3,793,874,81,1.65,-1.0,9,255,0.3,yes,809

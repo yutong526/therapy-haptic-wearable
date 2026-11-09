@@ -1,0 +1,3 @@
+session,order,condition,task,task_start_s,trigger_s,latency_s,pump_on_s,valid_share,task_arousal,rest_arousal,arousal_before,arousal_0_60s,arousal_60_120s,arousal_change,task_hr,rest_hr,hr_before,hr_0_60s,hr_60_120s,hr_change,task_eda_level,rest_eda_level,eda_level_before,eda_level_0_60s,eda_level_60_120s,eda_level_change,recovery_s
+20261105_D,airbag_english,control,math,370,547,177,0,0.99,0.12,0.05,0.17,0.57,0.0,-0.17,78.81,75.54,82.49,78.52,79.92,-2.57,3.09,2.42,2.7,4.22,3.22,0.51,34
+20261105_D,airbag_english,airbag,english,755,785,30,278,0.39,0.92,1.0,0.32,0.98,1.0,0.68,78.6,86.54,80.81,76.43,78.96,-1.84,5.84,nan,3.1,5.28,8.42,5.33,

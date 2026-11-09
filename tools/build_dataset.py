@@ -7,7 +7,7 @@ use; e.g. the chat phase itself and anything before it are left out), with the z
 "test" = test-only condition, empty = not used) and the per-person train / test split of each phase
 (first half train, second half test, CALIB_GAP_S or CALIB_GAP_CHECK_S between them).
 Example:
-    python tools/build_dataset.py sessions/20261030_Seona --out results/dataset.csv
+    python tools/build_dataset.py sessions/20261030_E --out results/dataset.csv
 """
 
 import argparse
